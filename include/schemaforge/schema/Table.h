@@ -30,4 +30,6 @@ public:
 
 std::ostream &operator<<(std::ostream &os, const TableConstraint &constraint);
 std::ostream &operator<<(std::ostream &os, const Table &table);
+std::ostream &operator<<(std::ostream &os,
+                         const ConstraintType &constraint_type);
 } // namespace schemaforge

@@ -12,14 +12,14 @@ std::vector<TableConstraint> Table::get_table_constraints() const {
 }
 
 std::ostream &operator<<(std::ostream &os, const TableConstraint &constraint) {
-  os << "Table Contraint type: " << static_cast<int>(constraint.type)
-     << ", columns: [";
+  os << "Table Contraint type: " << constraint.type << ", columns: [";
   for (const auto &column : constraint.columnNames) {
     os << column << ", ";
   }
   os << "])";
   return os;
 }
+
 std::ostream &operator<<(std::ostream &os, const Table &table) {
   os << "Table(name: " << table.get_table_name() << ", columns: [";
   for (const auto &column : table.get_columns()) {
@@ -32,4 +32,29 @@ std::ostream &operator<<(std::ostream &os, const Table &table) {
   os << "])";
   return os;
 }
+
+std::ostream &operator<<(std::ostream &os,
+                         const ConstraintType &constraint_type) {
+  switch (constraint_type) {
+  case ConstraintType::PrimaryKey:
+    os << "PRIMARY KEY";
+    break;
+  case ConstraintType::ForeignKey:
+    os << "FOREIGN KEY";
+    break;
+  case ConstraintType::NotNull:
+    os << "NOT NULL";
+    break;
+  case ConstraintType::Null:
+    os << "NULL";
+    break;
+  case ConstraintType::Unique:
+    os << "UNIQUE";
+    break;
+  default:
+    os << "UNKNOWN CONSTRAINT";
+  }
+  return os;
+}
+
 } // namespace schemaforge
