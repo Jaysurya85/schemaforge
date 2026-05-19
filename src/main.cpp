@@ -7,9 +7,8 @@ int main() {
   std::string sql = "CREATE TABLE users (id INT PRIMARY KEY, name TEXT NOT "
                     "NULL,  email TEXT UNIQUE);";
 
-  // sql += "CREATE TABLE orders(id INT PRIMARY KEY, user_id INT NOT NULL,
-  // amount "
-  //        "DECIMAL, FOREIGN KEY(user_id) REFERENCES users(id))";
+  sql += "CREATE TABLE orders(id INT PRIMARY KEY, user_id INT NOT NULL, amount "
+         "DECIMAL, FOREIGN KEY(user_id) REFERENCES users(id))";
 
   std::cout << "Welcome to Schemaforge" << '\n';
   std::cout << "Parsing SQL:\n" << sql << "\n\n";

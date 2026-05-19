@@ -44,4 +44,5 @@ public:
   bool is_nullable() const;
 };
 std::ostream &operator<<(std::ostream &os, const Column &column);
+std::ostream &operator<<(std::ostream &os, const DataType &data_type);
 } // namespace schemaforge
