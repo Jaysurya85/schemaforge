@@ -1,26 +1,18 @@
-#include "SQLParser.h"
+#include "schemaforge/parser/ParserAdapter.h"
+#include "schemaforge/schema/Table.h"
 #include <iostream>
+#include <vector>
 
 int main() {
   std::string sql =
       "CREATE TABLE orders (id INT, user_id INT, amount DECIMAL(10, 2));";
-
-  hsql::SQLParserResult result;
-  hsql::SQLParser::parse(sql, &result);
-  std::vector<hsql::SQLStatement *> statements = result.getStatements();
+  sql += "CREATE TABLE users (id INT, name VARCHAR(255));";
 
   std::cout << "Welcome to Schemaforge" << '\n';
+  schemaforge::ParserAdapter parser_adapter;
+  std::vector<schemaforge::Table> tables = parser_adapter.parse(sql);
 
-  for (const auto &stmt : statements) {
-    if (stmt->isType(hsql::StatementType::kStmtCreate)) {
-      std::cout << "Parsed a CREATE statement.\n";
-      auto *create_stmt = static_cast<hsql::CreateStatement *>(stmt);
-      std::cout << "Table name: " << create_stmt->tableName << '\n';
-      std::cout << "Columns are:\n";
-      for (const auto &col : *create_stmt->columns) {
-        std::cout << "  - " << col->name << " (" << col->type << ")\n";
-      }
-    }
-  }
+  std::cout << tables.size() << " tables parsed.\n";
+  std::cout << parser_adapter.print(tables) << '\n';
   return 0;
 }
