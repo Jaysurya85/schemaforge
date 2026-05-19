@@ -1,4 +1,5 @@
 #pragma once
+#include <ostream>
 #include <string>
 
 namespace schemaforge {
@@ -33,10 +34,14 @@ class Column {
 private:
   std::string column_name;
   ColumnType column_type;
+  bool nullable{true};
 
 public:
-  Column(const std::string &column_name, ColumnType column_type);
+  Column(const std::string &column_name, ColumnType column_type,
+         bool nullable = true);
   std::string get_column_name() const;
   ColumnType get_column_type() const;
+  bool is_nullable() const;
 };
+std::ostream &operator<<(std::ostream &os, const Column &column);
 } // namespace schemaforge
