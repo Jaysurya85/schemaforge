@@ -5,7 +5,14 @@
 
 namespace schemaforge {
 
-enum struct ConstraintType { ForeignKey, NotNull, Null, PrimaryKey, Unique };
+enum struct ConstraintType {
+  ForeignKey,
+  NotNull,
+  Null,
+  PrimaryKey,
+  Unique,
+  Unknown
+};
 
 struct TableConstraint {
 

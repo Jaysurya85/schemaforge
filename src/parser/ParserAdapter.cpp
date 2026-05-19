@@ -1,79 +1,196 @@
 #include "schemaforge/parser/ParserAdapter.h"
+
 #include "SQLParser.h"
 #include "schemaforge/schema/Column.h"
 
 namespace schemaforge {
 
-schemaforge::DataType
-ParserAdapter::convert_data_type(hsql::DataType data_type) {
+DataType ParserAdapter::convert_data_type(hsql::DataType data_type) {
   switch (data_type) {
   case hsql::DataType::BIGINT:
-    return schemaforge::DataType::BIGINT;
+    return DataType::BIGINT;
   case hsql::DataType::BOOLEAN:
-    return schemaforge::DataType::BOOLEAN;
+    return DataType::BOOLEAN;
   case hsql::DataType::CHAR:
-    return schemaforge::DataType::CHAR;
+    return DataType::CHAR;
   case hsql::DataType::DATE:
-    return schemaforge::DataType::DATE;
+    return DataType::DATE;
   case hsql::DataType::DATETIME:
-    return schemaforge::DataType::DATETIME;
+    return DataType::DATETIME;
   case hsql::DataType::DECIMAL:
-    return schemaforge::DataType::DECIMAL;
+    return DataType::DECIMAL;
   case hsql::DataType::DOUBLE:
-    return schemaforge::DataType::DOUBLE;
+    return DataType::DOUBLE;
   case hsql::DataType::FLOAT:
-    return schemaforge::DataType::FLOAT;
+    return DataType::FLOAT;
   case hsql::DataType::INT:
-    return schemaforge::DataType::INT;
+    return DataType::INT;
   case hsql::DataType::LONG:
-    return schemaforge::DataType::LONG;
+    return DataType::LONG;
   case hsql::DataType::REAL:
-    return schemaforge::DataType::REAL;
+    return DataType::REAL;
   case hsql::DataType::SMALLINT:
-    return schemaforge::DataType::SMALLINT;
+    return DataType::SMALLINT;
   case hsql::DataType::TEXT:
-    return schemaforge::DataType::TEXT;
+    return DataType::TEXT;
   case hsql::DataType::TIME:
-    return schemaforge::DataType::TIME;
-  case hsql::DataType ::VARCHAR:
-    return schemaforge ::DataType ::VARCHAR;
+    return DataType::TIME;
+  case hsql::DataType::VARCHAR:
+    return DataType::VARCHAR;
   default:
-    return schemaforge ::DataType ::UNKNOWN;
+    return DataType::UNKNOWN;
   }
 }
 
-schemaforge::ColumnType
+ColumnType
 ParserAdapter::convert_column_type(const hsql::ColumnType &hsql_column_type) {
-  return schemaforge::ColumnType{
-      convert_data_type(hsql_column_type.data_type), hsql_column_type.length,
-      hsql_column_type.precision, hsql_column_type.scale};
+  return ColumnType{convert_data_type(hsql_column_type.data_type),
+                    hsql_column_type.length, hsql_column_type.precision,
+                    hsql_column_type.scale};
 }
 
-schemaforge::ConstraintType ParserAdapter::convert_constraint_type(
+ConstraintType ParserAdapter::convert_constraint_type(
     const hsql::ConstraintType &constraint_type) {
-
   switch (constraint_type) {
   case hsql::ConstraintType::PrimaryKey:
-    return schemaforge::ConstraintType::PrimaryKey;
+    return ConstraintType::PrimaryKey;
   case hsql::ConstraintType::ForeignKey:
-    return schemaforge::ConstraintType::ForeignKey;
+    return ConstraintType::ForeignKey;
   case hsql::ConstraintType::NotNull:
-    return schemaforge::ConstraintType::NotNull;
+    return ConstraintType::NotNull;
   case hsql::ConstraintType::Null:
-    return schemaforge::ConstraintType::Null;
+    return ConstraintType::Null;
   case hsql::ConstraintType::Unique:
-    return schemaforge::ConstraintType::Unique;
+    return ConstraintType::Unique;
   default:
-    return schemaforge::ConstraintType::NotNull;
+    return ConstraintType::Unknown;
   }
 }
 
-schemaforge::TableConstraint ParserAdapter::convert_table_constraint(
+TableConstraint ParserAdapter::convert_table_constraint(
     const hsql::TableConstraint *table_constraint) {
-  std::vector<std::string> column_names(table_constraint->columnNames->begin(),
-                                        table_constraint->columnNames->end());
-  return schemaforge::TableConstraint(
-      convert_constraint_type(table_constraint->type), std::move(column_names));
+  std::vector<std::string> column_names;
+
+  if (table_constraint != nullptr && table_constraint->columnNames != nullptr) {
+    column_names.assign(table_constraint->columnNames->begin(),
+                        table_constraint->columnNames->end());
+  }
+
+  return TableConstraint(convert_constraint_type(table_constraint->type),
+                         std::move(column_names));
+}
+
+bool ParserAdapter::should_store_as_table_constraint(
+    TableConstraint table_contraint) const {
+
+  if (table_contraint.columnNames.empty()) {
+    return false;
+  }
+
+  switch (table_contraint.type) {
+  case ConstraintType::PrimaryKey:
+  case ConstraintType::Unique:
+    return true;
+
+  case ConstraintType::Null:
+  case ConstraintType::NotNull:
+  case ConstraintType::ForeignKey:
+  case ConstraintType::Unknown:
+  default:
+    return false;
+  }
+}
+
+std::vector<TableConstraint> ParserAdapter::extract_table_constraints(
+    const hsql::CreateStatement *create_stmt) {
+  std::vector<TableConstraint> table_constraints;
+
+  if (create_stmt == nullptr || create_stmt->tableConstraints == nullptr) {
+    return table_constraints;
+  }
+
+  for (const auto *constraint : *create_stmt->tableConstraints) {
+    TableConstraint table_constraint = convert_table_constraint(constraint);
+    if (!should_store_as_table_constraint(table_constraint)) {
+      continue;
+    }
+    table_constraints.push_back(convert_table_constraint(constraint));
+  }
+
+  return table_constraints;
+}
+
+std::vector<TableConstraint> ParserAdapter::extract_column_constraints(
+    const hsql::CreateStatement *create_stmt) {
+  std::vector<TableConstraint> column_constraints;
+
+  if (create_stmt == nullptr || create_stmt->columns == nullptr) {
+    return column_constraints;
+  }
+
+  for (const auto *col : *create_stmt->columns) {
+    if (col == nullptr || col->column_constraints == nullptr) {
+      continue;
+    }
+
+    for (const auto &constraint : *col->column_constraints) {
+      TableConstraint column_constraint{convert_constraint_type(constraint),
+                                        std::vector<std::string>{col->name}};
+
+      if (!should_store_as_table_constraint(column_constraint)) {
+        continue;
+      }
+      column_constraints.push_back(std::move(column_constraint));
+    }
+  }
+
+  return column_constraints;
+}
+
+std::vector<TableConstraint>
+ParserAdapter::convert_constraints(const hsql::CreateStatement *create_stmt) {
+  auto constraints = extract_table_constraints(create_stmt);
+  auto column_constraints = extract_column_constraints(create_stmt);
+
+  constraints.insert(constraints.end(),
+                     std::make_move_iterator(column_constraints.begin()),
+                     std::make_move_iterator(column_constraints.end()));
+
+  return constraints;
+}
+
+Column ParserAdapter::convert_column(const hsql::ColumnDefinition *col) {
+  ColumnType column_type{convert_column_type(col->type)};
+  return Column(col->name, column_type, col->nullable);
+}
+
+std::vector<Column>
+ParserAdapter::convert_columns(const hsql::CreateStatement *create_stmt) {
+  std::vector<Column> columns;
+
+  if (create_stmt == nullptr || create_stmt->columns == nullptr) {
+    return columns;
+  }
+
+  for (const auto *col : *create_stmt->columns) {
+    if (col == nullptr) {
+      continue;
+    }
+
+    columns.push_back(convert_column(col));
+  }
+
+  return columns;
+}
+
+Table ParserAdapter::convert_create_statement(
+    const hsql::CreateStatement *create_stmt) {
+  auto constraints = convert_constraints(create_stmt);
+  auto foreign_key_constraints = extract_foreign_key_constraints(create_stmt);
+  auto columns = convert_columns(create_stmt);
+
+  return Table(create_stmt->tableName, std::move(columns),
+               std::move(constraints));
 }
 
 std::vector<Table> ParserAdapter::parse(const std::string &sql) {
@@ -81,32 +198,17 @@ std::vector<Table> ParserAdapter::parse(const std::string &sql) {
 
   hsql::SQLParserResult result;
   hsql::SQLParser::parse(sql, &result);
-  std::vector<hsql::SQLStatement *> statements = result.getStatements();
 
-  for (const auto &stmt : statements) {
-    if (stmt->isType(hsql::StatementType::kStmtCreate)) {
-      auto *create_stmt = static_cast<hsql::CreateStatement *>(stmt);
+  auto statements = result.getStatements();
 
-      std::vector<TableConstraint> table_contraints;
-      for (const auto &contraints : *create_stmt->tableConstraints) {
-        TableConstraint table_constraint = convert_table_constraint(contraints);
-        table_contraints.push_back(std::move(table_constraint));
-      }
-
-      std::vector<Column> columns;
-      for (const auto &col : *create_stmt->columns) {
-        ColumnType column_type{convert_column_type(col->type)};
-        columns.push_back(Column(col->name, column_type, col->nullable));
-        for (const auto &constraint : *col->column_constraints) {
-          TableConstraint column_constraint =
-              TableConstraint(convert_constraint_type(constraint),
-                              std::vector<std::string>{col->name});
-          table_contraints.push_back(std::move(column_constraint));
-        }
-      }
-      tables.push_back(
-          Table(create_stmt->tableName, columns, table_contraints));
+  for (const auto *stmt : statements) {
+    if (stmt == nullptr || !stmt->isType(hsql::StatementType::kStmtCreate)) {
+      continue;
     }
+
+    const auto *create_stmt = static_cast<const hsql::CreateStatement *>(stmt);
+
+    tables.push_back(convert_create_statement(create_stmt));
   }
 
   return tables;
