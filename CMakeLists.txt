@@ -8,4 +8,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(schemaforge
     src/main.cpp
+    src/parser/ParserAdapter.cpp
+    src/schema/Table.cpp
+    src/schema/Column.cpp
+)
+
+target_include_directories(schemaforge PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/sql-parser/src ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(schemaforge PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/sql-parser/libsqlparser.so
 )
