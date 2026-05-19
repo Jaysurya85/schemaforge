@@ -159,6 +159,118 @@ ParserAdapter::convert_constraints(const hsql::CreateStatement *create_stmt) {
   return constraints;
 }
 
+std::vector<std::string>
+ParserAdapter::convert_names(const std::vector<char *> *names) {
+  std::vector<std::string> result;
+
+  if (names == nullptr) {
+    return result;
+  }
+
+  result.reserve(names->size());
+
+  for (const auto *name : *names) {
+    if (name != nullptr) {
+      result.emplace_back(name);
+    }
+  }
+
+  return result;
+}
+
+ForeignKey ParserAdapter::convert_foreign_key(
+    const hsql::ForeignKeyConstraint *foreign_key_constraint) {
+  std::vector<std::string> local_columns;
+  std::string referenced_table;
+  std::vector<std::string> referenced_columns;
+
+  if (foreign_key_constraint != nullptr) {
+    local_columns = convert_names(foreign_key_constraint->columnNames);
+
+    const auto *references = foreign_key_constraint->references;
+
+    if (references != nullptr) {
+      if (references->table != nullptr) {
+        referenced_table = references->table;
+      }
+
+      referenced_columns = convert_names(references->columns);
+    }
+  }
+
+  return ForeignKey(std::move(local_columns), std::move(referenced_table),
+                    std::move(referenced_columns));
+}
+
+std::vector<ForeignKey> ParserAdapter::extract_table_foreign_keys(
+    const hsql::CreateStatement *create_stmt) {
+  std::vector<ForeignKey> foreign_keys;
+
+  if (create_stmt == nullptr || create_stmt->tableConstraints == nullptr) {
+    return foreign_keys;
+  }
+
+  for (const auto *constraint : *create_stmt->tableConstraints) {
+    if (constraint == nullptr ||
+        constraint->type != hsql::ConstraintType::ForeignKey) {
+      continue;
+    }
+
+    const auto *foreign_key_constraint =
+        static_cast<const hsql::ForeignKeyConstraint *>(constraint);
+
+    foreign_keys.push_back(convert_foreign_key(foreign_key_constraint));
+  }
+  return foreign_keys;
+}
+
+std::vector<ForeignKey> ParserAdapter::extract_column_foreign_keys(
+    const hsql::CreateStatement *create_stmt) {
+  std::vector<ForeignKey> foreign_keys;
+
+  if (create_stmt == nullptr || create_stmt->columns == nullptr) {
+    return foreign_keys;
+  }
+
+  for (const auto *col : *create_stmt->columns) {
+    if (col == nullptr || col->references == nullptr) {
+      continue;
+    }
+
+    for (const auto *references : *col->references) {
+      if (references == nullptr) {
+        continue;
+      }
+
+      std::vector<std::string> local_columns{col->name};
+
+      std::string referenced_table;
+      if (references->table != nullptr) {
+        referenced_table = references->table;
+      }
+
+      auto referenced_columns = convert_names(references->columns);
+
+      foreign_keys.emplace_back(std::move(local_columns),
+                                std::move(referenced_table),
+                                std::move(referenced_columns));
+    }
+  }
+  return foreign_keys;
+}
+
+std::vector<ForeignKey>
+ParserAdapter::extract_foreign_keys(const hsql::CreateStatement *create_stmt) {
+  auto foreign_keys = extract_table_foreign_keys(create_stmt);
+  auto column_foreign_keys = extract_column_foreign_keys(create_stmt);
+
+  foreign_keys.insert(foreign_keys.end(),
+                      std::make_move_iterator(column_foreign_keys.begin()),
+                      std::make_move_iterator(column_foreign_keys.end()));
+
+  return foreign_keys;
+}
+
 Column ParserAdapter::convert_column(const hsql::ColumnDefinition *col) {
   ColumnType column_type{convert_column_type(col->type)};
   return Column(col->name, column_type, col->nullable);
@@ -186,11 +298,11 @@ ParserAdapter::convert_columns(const hsql::CreateStatement *create_stmt) {
 Table ParserAdapter::convert_create_statement(
     const hsql::CreateStatement *create_stmt) {
   auto constraints = convert_constraints(create_stmt);
-  auto foreign_key_constraints = extract_foreign_key_constraints(create_stmt);
+  auto foreign_keys = extract_foreign_keys(create_stmt);
   auto columns = convert_columns(create_stmt);
 
   return Table(create_stmt->tableName, std::move(columns),
-               std::move(constraints));
+               std::move(constraints), std::move(foreign_keys));
 }
 
 std::vector<Table> ParserAdapter::parse(const std::string &sql) {

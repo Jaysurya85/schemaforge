@@ -32,6 +32,20 @@ private:
   std::vector<TableConstraint>
   convert_constraints(const hsql::CreateStatement *create_stmt);
 
+  ForeignKey
+  convert_foreign_key(const hsql::ForeignKeyConstraint *foreign_key_constraint);
+
+  std::vector<ForeignKey>
+  extract_table_foreign_keys(const hsql::CreateStatement *create_stmt);
+
+  std::vector<ForeignKey>
+  extract_column_foreign_keys(const hsql::CreateStatement *create_stmt);
+
+  std::vector<ForeignKey>
+  extract_foreign_keys(const hsql::CreateStatement *create_stmt);
+
+  std::vector<std::string> convert_names(const std::vector<char *> *names);
+
   Column convert_column(const hsql::ColumnDefinition *col);
 
   std::vector<Column> convert_columns(const hsql::CreateStatement *create_stmt);
