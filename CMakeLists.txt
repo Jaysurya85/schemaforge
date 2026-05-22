@@ -12,6 +12,8 @@ add_executable(schemaforge
     src/schema/Table.cpp
     src/schema/Column.cpp
     src/validation/SchemaValidator.cpp
+    src/graph/DependencyGraph.cpp
+    src/io/FileReader.cpp
 )
 
 target_include_directories(schemaforge PRIVATE
