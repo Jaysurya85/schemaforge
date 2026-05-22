@@ -11,6 +11,7 @@ add_executable(schemaforge
     src/parser/ParserAdapter.cpp
     src/schema/Table.cpp
     src/schema/Column.cpp
+    src/validation/SchemaValidator.cpp
 )
 
 target_include_directories(schemaforge PRIVATE
