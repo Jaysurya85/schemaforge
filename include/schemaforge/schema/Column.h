@@ -25,24 +25,23 @@ enum class DataType {
 
 struct ColumnType {
   DataType data_type{DataType::UNKNOWN};
-  int64_t length{0};    // Used for, e.g., VARCHAR(10)
-  int64_t precision{0}; // Used for, e.g., DECIMAL (6, 4) or TIME (5)
-  int64_t scale{0};     // Used for DECIMAL (6, 4)
+  int64_t length{0};     // Used for, e.g., VARCHAR(10)
+  int64_t precision{0};  // Used for, e.g., DECIMAL (6, 4) or TIME (5)
+  int64_t scale{0};      // Used for DECIMAL (6, 4)
 };
 
 class Column {
-private:
+ private:
   std::string column_name;
   ColumnType column_type;
   bool nullable{true};
 
-public:
-  Column(const std::string &column_name, ColumnType column_type,
-         bool nullable = true);
-  std::string get_column_name() const;
-  ColumnType get_column_type() const;
-  bool is_nullable() const;
+ public:
+  Column(const std::string& column_name, ColumnType column_type, bool nullable = true);
+  [[nodiscard]] std::string get_column_name() const;
+  [[nodiscard]] ColumnType get_column_type() const;
+  [[nodiscard]] bool is_nullable() const;
 };
-std::ostream &operator<<(std::ostream &os, const Column &column);
-std::ostream &operator<<(std::ostream &os, const DataType &data_type);
-} // namespace schemaforge
+std::ostream& operator<<(std::ostream& os, const Column& column);
+std::ostream& operator<<(std::ostream& os, const DataType& data_type);
+}  // namespace schemaforge

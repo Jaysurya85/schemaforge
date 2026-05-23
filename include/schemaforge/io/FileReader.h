@@ -5,8 +5,8 @@
 namespace schemaforge {
 
 class FileReader {
-public:
-  static std::string read_file(const std::string &file_path);
+ public:
+  static std::string read_file(const std::string& file_path);
 };
 
-} // namespace schemaforge
+}  // namespace schemaforge

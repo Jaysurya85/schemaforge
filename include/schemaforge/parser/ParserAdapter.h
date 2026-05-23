@@ -1,59 +1,54 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "../schema/Table.h"
 #include "sql/ColumnType.h"
 #include "sql/CreateStatement.h"
 
-#include <string>
-#include <vector>
-
 namespace schemaforge {
 
 class ParserAdapter {
-private:
-  DataType convert_data_type(hsql::DataType data_type);
+ private:
+  static DataType convert_data_type(hsql::DataType data_type);
 
-  ColumnType convert_column_type(const hsql::ColumnType &hsql_column_type);
+  static ColumnType convert_column_type(const hsql::ColumnType& hsql_column_type);
 
-  ConstraintType
-  convert_constraint_type(const hsql::ConstraintType &constraint_type);
+  static ConstraintType convert_constraint_type(const hsql::ConstraintType& constraint_type);
 
-  TableConstraint
-  convert_table_constraint(const hsql::TableConstraint *table_constraint);
+  static TableConstraint convert_table_constraint(const hsql::TableConstraint* table_constraint);
 
-  std::vector<TableConstraint>
-  extract_table_constraints(const hsql::CreateStatement *create_stmt);
+  static std::vector<TableConstraint> extract_table_constraints(
+      const hsql::CreateStatement* create_stmt);
 
-  bool should_store_as_table_constraint(TableConstraint table_contraint) const;
+  [[nodiscard]] static bool should_store_as_table_constraint(TableConstraint& table_contraint);
 
-  std::vector<TableConstraint>
-  extract_column_constraints(const hsql::CreateStatement *create_stmt);
+  static std::vector<TableConstraint> extract_column_constraints(
+      const hsql::CreateStatement* create_stmt);
 
-  std::vector<TableConstraint>
-  convert_constraints(const hsql::CreateStatement *create_stmt);
+  static std::vector<TableConstraint> convert_constraints(const hsql::CreateStatement* create_stmt);
 
-  ForeignKey
-  convert_foreign_key(const hsql::ForeignKeyConstraint *foreign_key_constraint);
+  static ForeignKey convert_foreign_key(const hsql::ForeignKeyConstraint* foreign_key_constraint);
 
-  std::vector<ForeignKey>
-  extract_table_foreign_keys(const hsql::CreateStatement *create_stmt);
+  static std::vector<ForeignKey> extract_table_foreign_keys(
+      const hsql::CreateStatement* create_stmt);
 
-  std::vector<ForeignKey>
-  extract_column_foreign_keys(const hsql::CreateStatement *create_stmt);
+  static std::vector<ForeignKey> extract_column_foreign_keys(
+      const hsql::CreateStatement* create_stmt);
 
-  std::vector<ForeignKey>
-  extract_foreign_keys(const hsql::CreateStatement *create_stmt);
+  static std::vector<ForeignKey> extract_foreign_keys(const hsql::CreateStatement* create_stmt);
 
-  std::vector<std::string> convert_names(const std::vector<char *> *names);
+  static std::vector<std::string> convert_names(const std::vector<char*>* names);
 
-  Column convert_column(const hsql::ColumnDefinition *col);
+  static Column convert_column(const hsql::ColumnDefinition* col);
 
-  std::vector<Column> convert_columns(const hsql::CreateStatement *create_stmt);
+  static std::vector<Column> convert_columns(const hsql::CreateStatement* create_stmt);
 
-  Table convert_create_statement(const hsql::CreateStatement *create_stmt);
+  static Table convert_create_statement(const hsql::CreateStatement* create_stmt);
 
-public:
-  std::vector<Table> parse(const std::string &sql);
+ public:
+  static std::vector<Table> parse(const std::string& sql);
 };
 
-} // namespace schemaforge
+}  // namespace schemaforge
