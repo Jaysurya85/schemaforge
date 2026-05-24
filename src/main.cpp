@@ -1,24 +1,23 @@
+#include <iostream>
+#include <vector>
+
 #include "schemaforge/graph/DependencyGraph.h"
 #include "schemaforge/io/FileReader.h"
 #include "schemaforge/parser/ParserAdapter.h"
 #include "schemaforge/schema/Table.h"
 #include "schemaforge/validation/SchemaValidator.h"
-#include <iostream>
-#include <vector>
 
-int main() {
+auto main() -> int {
   std::string sql = schemaforge::FileReader::read_file("schema.sql");
 
   std::cout << "Welcome to Schemaforge" << '\n';
   std::cout << "Parsing SQL:\n" << sql << "\n\n";
-  schemaforge::ParserAdapter parser_adapter;
 
-  std::vector<schemaforge::Table> tables = parser_adapter.parse(sql);
-  schemaforge::ValidationResult validation_result =
-      schemaforge::SchemaValidator().validate(tables);
+  std::vector<schemaforge::Table> tables = schemaforge::ParserAdapter::parse(sql);
+  schemaforge::ValidationResult validation_result = schemaforge::SchemaValidator::validate(tables);
 
   std::cout << tables.size() << " tables parsed.\n";
-  for (const auto &table : tables) {
+  for (const auto& table : tables) {
     std::cout << table << "\n\n";
   }
 
@@ -26,11 +25,10 @@ int main() {
 
   auto dependency_graph = schemaforge::DependencyGraph();
   dependency_graph.make_graph(tables);
-  schemaforge::TopologicalSortResult sort_result =
-      dependency_graph.topological_sort();
+  schemaforge::TopologicalSortResult sort_result = dependency_graph.topological_sort();
 
   std::cout << dependency_graph << "\n";
-  for (const auto &table_name : sort_result.order) {
+  for (const auto& table_name : sort_result.order) {
     std::cout << table_name << "\n";
   }
 
