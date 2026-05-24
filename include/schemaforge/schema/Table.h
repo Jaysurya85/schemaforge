@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -7,7 +8,14 @@
 
 namespace schemaforge {
 
-enum struct ConstraintType { ForeignKey, NotNull, Null, PrimaryKey, Unique, Unknown };
+enum struct ConstraintType : std::uint8_t {
+  ForeignKey,
+  NotNull,
+  Null,
+  PrimaryKey,
+  Unique,
+  Unknown
+};
 
 struct TableConstraint {
   TableConstraint(const ConstraintType& type, const std::vector<std::string>& columnNames)
