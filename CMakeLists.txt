@@ -13,6 +13,11 @@ add_executable(schemaforge
     src/schema/Column.cpp
     src/validation/SchemaValidator.cpp
     src/graph/DependencyGraph.cpp
+    src/generator/GenerationPlan.cpp
+    src/generator/BooleanGenerator.cpp
+    src/generator/DecimalGenerator.cpp
+    src/generator/IntGenerator.cpp
+    src/generator/TextGenerator.cpp
     src/io/FileReader.cpp
 )
 

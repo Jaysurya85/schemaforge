@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 
+#include "schemaforge/generator/GenerationPlan.h"
 #include "schemaforge/graph/DependencyGraph.h"
 #include "schemaforge/io/FileReader.h"
 #include "schemaforge/parser/ParserAdapter.h"
@@ -25,15 +26,26 @@ auto main() -> int {
 
   auto dependency_graph = schemaforge::DependencyGraph();
   dependency_graph.make_graph(tables);
-  schemaforge::TopologicalSortResult sort_result = dependency_graph.topological_sort();
+  schemaforge::TopologicalTableSortResult table_sort_result =
+      schemaforge::DependencyGraph::sort_tables(tables);
 
-  std::cout << dependency_graph << "\n";
-  for (const auto& table_name : sort_result.order) {
-    std::cout << table_name << "\n";
+  if (table_sort_result.has_cycle) {
+    std::cerr << "Cycle detected. Tables cannot be fully topologically sorted.\n";
+    return 1;
   }
 
-  if (sort_result.has_cycle) {
-    std::cout << "Cycle detected. Remaining tables:\n";
+  std::cout << dependency_graph << "\n";
+  std::cout << "Topologically sorted tables:\n";
+  for (const auto& table : table_sort_result.tables) {
+    std::cout << table << "\n\n";
+  }
+
+  std::vector<schemaforge::TableData> table_data =
+      schemaforge::GenerationPlan::generate_table_data(tables, 10);
+
+  std::cout << "Generated table data:\n";
+  for (const auto& table : table_data) {
+    std::cout << table << "\n\n";
   }
 
   return 0;

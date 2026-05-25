@@ -2,14 +2,17 @@
 
 #include <algorithm>
 #include <queue>
+#include <stdexcept>
+#include <unordered_map>
 
 namespace schemaforge {
 
-DependencyGraph::DependencyGraph() : graph({}), in_degree({}) {}
+DependencyGraph::DependencyGraph() : graph({}), in_degree({}), table_order({}) {}
 
 void DependencyGraph::add_table(const TableId& table_id) {
   if (!graph.contains(table_id)) {
     graph[table_id] = std::vector<TableId>();
+    table_order.push_back(table_id);
   }
   if (!in_degree.contains(table_id)) {
     in_degree[table_id] = 0;
@@ -29,6 +32,7 @@ void DependencyGraph::add_dependency(const TableId& from, const TableId& to) {
 void DependencyGraph::make_graph(const std::vector<Table>& tables) {
   graph.clear();
   in_degree.clear();
+  table_order.clear();
 
   for (const auto& table : tables) {
     add_table(table.get_table_name());
@@ -48,9 +52,9 @@ TopologicalSortResult DependencyGraph::topological_sort() const {
   TopologicalSortResult result(false, {});
   std::queue<TableId> queue;
 
-  for (const auto& node : current_in_degree) {
-    if (node.second == 0) {
-      queue.push(node.first);
+  for (const auto& table_id : table_order) {
+    if (current_in_degree[table_id] == 0) {
+      queue.push(table_id);
     }
   }
 
@@ -75,6 +79,30 @@ TopologicalSortResult DependencyGraph::topological_sort() const {
   result.has_cycle = result.order.size() != graph.size();
 
   return result;
+}
+
+TopologicalTableSortResult DependencyGraph::sort_tables(const std::vector<Table>& tables) {
+  DependencyGraph dependency_graph;
+  dependency_graph.make_graph(tables);
+  TopologicalSortResult sort_result = dependency_graph.topological_sort();
+
+  std::unordered_map<TableId, Table> table_by_name;
+  table_by_name.reserve(tables.size());
+  for (auto table : tables) {
+    table_by_name.emplace(table.get_table_name(), std::move(table));
+  }
+
+  std::vector<Table> sorted_tables;
+  sorted_tables.reserve(sort_result.order.size());
+  for (const auto& table_name : sort_result.order) {
+    const auto table = table_by_name.find(table_name);
+    if (table == table_by_name.end()) {
+      throw std::runtime_error("Table '" + table_name + "' was not found while sorting tables");
+    }
+    sorted_tables.push_back(std::move(table->second));
+  }
+
+  return {sort_result.has_cycle, std::move(sort_result.order), std::move(sorted_tables)};
 }
 
 std::ostream& operator<<(std::ostream& os, const DependencyGraph& dependency_graph) {
