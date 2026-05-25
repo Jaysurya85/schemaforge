@@ -2,10 +2,6 @@
 
 #include <algorithm>
 #include <stdexcept>
-#include <string>
-#include <unordered_map>
-
-#include "schemaforge/graph/DependencyGraph.h"
 
 namespace schemaforge {
 
@@ -51,9 +47,9 @@ bool is_decimal_type(DataType data_type) {
 
 }  // namespace
 
-std::vector<Data> GenerationPlan::generate_column_data(
-    const Column& column, const Table& table, int num_rows,
-    const std::unordered_map<std::string, int>& row_counts) {
+std::vector<Data> GenerationPlan::generate_column_data(const Column& column, const Table& table,
+                                                       int num_rows,
+                                                       const GenerationConfig& config) {
   const auto column_data_type = column.get_column_type().data_type;
 
   if (has_constraint(table, column, ConstraintType::PrimaryKey)) {
@@ -72,13 +68,13 @@ std::vector<Data> GenerationPlan::generate_column_data(
                                "' must use an integer type for v0.1 generation");
     }
 
-    const auto referenced_row_count = row_counts.find(foreign_key->referenced_table);
-    if (referenced_row_count == row_counts.end() || referenced_row_count->second <= 0) {
+    const int referenced_row_count = config.get_row_count(foreign_key->referenced_table);
+    if (referenced_row_count <= 0) {
       throw std::runtime_error("Referenced table '" + foreign_key->referenced_table +
                                "' has no rows available for foreign key generation");
     }
 
-    IntGenerator generator(1, referenced_row_count->second);
+    IntGenerator generator(1, referenced_row_count);
     return generator.generate(num_rows);
   }
 
@@ -105,42 +101,36 @@ std::vector<Data> GenerationPlan::generate_column_data(
   throw std::runtime_error("Unsupported data type for column '" + column.get_column_name() + "'");
 }
 
-std::vector<ColumnData> GenerationPlan::generate_columns_data(
-    const Table& table, int num_rows, const std::unordered_map<std::string, int>& row_counts) {
+std::vector<ColumnData> GenerationPlan::generate_columns_data(const Table& table, int num_rows,
+                                                              const GenerationConfig& config) {
   std::vector<ColumnData> column_data;
   const auto columns = table.get_columns();
   column_data.reserve(columns.size());
   for (const auto& column : columns) {
     column_data.push_back(
         ColumnData{.column = column,
-                   .data = std::move(generate_column_data(column, table, num_rows, row_counts))});
+                   .data = std::move(generate_column_data(column, table, num_rows, config))});
   }
   return column_data;
 }
 
 std::vector<TableData> GenerationPlan::generate_table_data(const std::vector<Table>& tables,
                                                            int num_rows) {
-  std::unordered_map<std::string, int> row_counts;
-  row_counts.reserve(tables.size());
+  GenerationConfig config;
+  config.default_num_rows = num_rows;
   for (const auto& table : tables) {
-    row_counts[table.get_table_name()] = num_rows;
+    config.table_row_counts[table.get_table_name()] = num_rows;
   }
 
-  return generate_table_data(tables, row_counts, num_rows);
+  return generate_table_data(tables, config);
 }
 
-std::vector<TableData> GenerationPlan::generate_table_data(
-    const std::vector<Table>& tables, const std::unordered_map<std::string, int>& row_counts,
-    int default_num_rows) {
+std::vector<TableData> GenerationPlan::generate_table_data(const std::vector<Table>& tables,
+                                                           const GenerationConfig& config) {
   std::vector<TableData> table_data;
   table_data.reserve(tables.size());
   for (const auto& table : tables) {
-    int num_rows = default_num_rows;
-    const auto row_count = row_counts.find(table.get_table_name());
-    if (row_count != row_counts.end()) {
-      num_rows = row_count->second;
-    }
-
+    const int num_rows = config.get_row_count(table.get_table_name());
     if (num_rows < 0) {
       throw std::runtime_error("Row count cannot be negative for table '" + table.get_table_name() +
                                "'");
@@ -148,9 +138,18 @@ std::vector<TableData> GenerationPlan::generate_table_data(
 
     table_data.push_back(
         TableData{.table_name = table.get_table_name(),
-                  .columns = std::move(generate_columns_data(table, num_rows, row_counts))});
+                  .columns = std::move(generate_columns_data(table, num_rows, config))});
   }
   return table_data;
+}
+
+std::vector<TableData> GenerationPlan::generate_table_data(
+    const std::vector<Table>& tables, const std::unordered_map<std::string, int>& row_counts,
+    int default_num_rows) {
+  GenerationConfig config;
+  config.default_num_rows = default_num_rows;
+  config.table_row_counts = row_counts;
+  return generate_table_data(tables, config);
 }
 
 std::ostream& operator<<(std::ostream& os, const ColumnData& column_data) {

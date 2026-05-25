@@ -12,6 +12,7 @@ add_executable(schemaforge
     src/schema/Table.cpp
     src/schema/Column.cpp
     src/validation/SchemaValidator.cpp
+    src/validation/GenerationFeasibilityValidator.cpp
     src/graph/DependencyGraph.cpp
     src/generator/GenerationPlan.cpp
     src/generator/BooleanGenerator.cpp
@@ -19,6 +20,7 @@ add_executable(schemaforge
     src/generator/IntGenerator.cpp
     src/generator/TextGenerator.cpp
     src/io/FileReader.cpp
+    src/output/SqlInsertWriter.cpp
 )
 
 target_include_directories(schemaforge PRIVATE
