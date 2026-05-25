@@ -4,11 +4,12 @@
 #include "schemaforge/generator/GenerationPlan.h"
 #include "schemaforge/graph/DependencyGraph.h"
 #include "schemaforge/io/FileReader.h"
+#include "schemaforge/output/SqlInsertWriter.h"
 #include "schemaforge/parser/ParserAdapter.h"
 #include "schemaforge/schema/Table.h"
 #include "schemaforge/validation/GenerationFeasibilityValidator.h"
+#include "schemaforge/validation/SQLiteValidator.h"
 #include "schemaforge/validation/SchemaValidator.h"
-#include "schemaforge/output/SqlInsertWriter.h"
 
 auto main() -> int {
   std::string sql = schemaforge::FileReader::read_file("schema.sql");
@@ -73,6 +74,14 @@ auto main() -> int {
   std::cout << "Generated SQL INSERT statements:\n";
   for (const auto& insert_statement : insert_statements) {
     std::cout << insert_statement << '\n';
+  }
+
+  schemaforge::ValidationResult sqlite_validation_result =
+      schemaforge::SQLiteValidator::validate(sql, insert_statements);
+
+  std::cout << "\nSQLite " << sqlite_validation_result << "\n";
+  if (!sqlite_validation_result.is_valid) {
+    return 1;
   }
 
   return 0;
