@@ -1,10 +1,11 @@
 #pragma once
+#include <cstdint>
 #include <ostream>
 #include <string>
 
 namespace schemaforge {
 
-enum class DataType {
+enum class DataType : std::uint8_t {
   UNKNOWN,
   BIGINT,
   BOOLEAN,
