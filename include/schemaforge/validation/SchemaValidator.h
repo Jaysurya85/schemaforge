@@ -7,9 +7,9 @@
 
 namespace schemaforge {
 struct ValidationResult {
-  ValidationResult(bool isValid, std::vector<std::string> errors)
-      : isValid(isValid), errors(std::move(errors)) {}
-  bool isValid;
+  ValidationResult(bool is_valid, std::vector<std::string> errors)
+      : is_valid(is_valid), errors(std::move(errors)) {}
+  bool is_valid;
   std::vector<std::string> errors;
 };
 

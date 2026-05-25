@@ -37,6 +37,7 @@ class DependencyGraph {
   void make_graph(const std::vector<Table>& tables);
   auto& get_graph() const;
   TopologicalSortResult topological_sort() const;
+  TopologicalTableSortResult topological_sort_tables(const std::vector<Table>& tables) const;
   static TopologicalTableSortResult sort_tables(const std::vector<Table>& tables);
 };
 

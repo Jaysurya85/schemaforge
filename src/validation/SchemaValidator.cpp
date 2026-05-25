@@ -43,7 +43,7 @@ ValidationResult SchemaValidator::validate(const std::vector<Table>& tables) {
     auto result = check_foreign_keys(table.get_foreign_keys(), tables);
 
     if (!result.first) {
-      validation_result.isValid = false;
+      validation_result.is_valid = false;
       validation_result.errors.push_back(result.second);
       continue;
     }
@@ -52,8 +52,8 @@ ValidationResult SchemaValidator::validate(const std::vector<Table>& tables) {
 }
 
 std::ostream& operator<<(std::ostream& os, const ValidationResult& validation_result) {
-  os << "Validation Result: " << (validation_result.isValid ? "Valid" : "Invalid") << "\n";
-  if (!validation_result.isValid) {
+  os << "Validation Result: " << (validation_result.is_valid ? "Valid" : "Invalid") << "\n";
+  if (!validation_result.is_valid) {
     os << "Errors:\n";
     for (const auto& error : validation_result.errors) {
       os << "- " << error << "\n";

@@ -7,6 +7,7 @@
 
 #include "schemaforge/generator/BooleanGenerator.h"
 #include "schemaforge/generator/DecimalGenerator.h"
+#include "schemaforge/generator/GenerationConfig.h"
 #include "schemaforge/generator/IntGenerator.h"
 #include "schemaforge/generator/TextGenerator.h"
 #include "schemaforge/schema/Column.h"
@@ -26,13 +27,14 @@ struct TableData {
 class GenerationPlan {
  private:
   static std::vector<Data> generate_column_data(const Column& column, const Table& table,
-                                                int num_rows,
-                                                const std::unordered_map<std::string, int>& row_counts);
+                                                int num_rows, const GenerationConfig& config);
   static std::vector<ColumnData> generate_columns_data(
-      const Table& table, int num_rows, const std::unordered_map<std::string, int>& row_counts);
+      const Table& table, int num_rows, const GenerationConfig& config);
 
  public:
   static std::vector<TableData> generate_table_data(const std::vector<Table>& tables, int num_rows);
+  static std::vector<TableData> generate_table_data(const std::vector<Table>& tables,
+                                                    const GenerationConfig& config);
   static std::vector<TableData> generate_table_data(
       const std::vector<Table>& tables, const std::unordered_map<std::string, int>& row_counts,
       int default_num_rows);

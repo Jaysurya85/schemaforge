@@ -81,11 +81,9 @@ TopologicalSortResult DependencyGraph::topological_sort() const {
   return result;
 }
 
-TopologicalTableSortResult DependencyGraph::sort_tables(const std::vector<Table>& tables) {
-  DependencyGraph dependency_graph;
-  dependency_graph.make_graph(tables);
-  TopologicalSortResult sort_result = dependency_graph.topological_sort();
-
+TopologicalTableSortResult DependencyGraph::topological_sort_tables(
+    const std::vector<Table>& tables) const {
+  TopologicalSortResult sort_result = topological_sort();
   std::unordered_map<TableId, Table> table_by_name;
   table_by_name.reserve(tables.size());
   for (auto table : tables) {
@@ -103,6 +101,12 @@ TopologicalTableSortResult DependencyGraph::sort_tables(const std::vector<Table>
   }
 
   return {sort_result.has_cycle, std::move(sort_result.order), std::move(sorted_tables)};
+}
+
+TopologicalTableSortResult DependencyGraph::sort_tables(const std::vector<Table>& tables) {
+  DependencyGraph dependency_graph;
+  dependency_graph.make_graph(tables);
+  return dependency_graph.topological_sort_tables(tables);
 }
 
 std::ostream& operator<<(std::ostream& os, const DependencyGraph& dependency_graph) {
