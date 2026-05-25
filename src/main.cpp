@@ -41,7 +41,7 @@ auto main() -> int {
   }
 
   std::vector<schemaforge::TableData> table_data =
-      schemaforge::GenerationPlan::generate_table_data(tables, 10);
+      schemaforge::GenerationPlan::generate_table_data(tables, {{"users", 10}, {"orders", 3}}, 10);
 
   std::cout << "Generated table data:\n";
   for (const auto& table : table_data) {

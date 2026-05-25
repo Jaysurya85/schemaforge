@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 
 #include "schemaforge/graph/DependencyGraph.h"
 
@@ -24,14 +26,14 @@ bool has_constraint(const Table& table, const Column& column, ConstraintType con
   return false;
 }
 
-bool is_foreign_key(const Table& table, const Column& column) {
+const ForeignKey* find_foreign_key(const Table& table, const Column& column) {
   const auto column_name = column.get_column_name();
   for (const auto& foreign_key : table.get_foreign_keys()) {
     if (contains_column(foreign_key.local_columns, column_name)) {
-      return true;
+      return &foreign_key;
     }
   }
-  return false;
+  return nullptr;
 }
 
 bool is_integer_type(DataType data_type) {
@@ -49,8 +51,9 @@ bool is_decimal_type(DataType data_type) {
 
 }  // namespace
 
-std::vector<Data> GenerationPlan::generate_column_data(const Column& column, const Table& table,
-                                                       int num_rows) {
+std::vector<Data> GenerationPlan::generate_column_data(
+    const Column& column, const Table& table, int num_rows,
+    const std::unordered_map<std::string, int>& row_counts) {
   const auto column_data_type = column.get_column_type().data_type;
 
   if (has_constraint(table, column, ConstraintType::PrimaryKey)) {
@@ -62,12 +65,20 @@ std::vector<Data> GenerationPlan::generate_column_data(const Column& column, con
     return generator.generate(num_rows);
   }
 
-  if (is_foreign_key(table, column)) {
+  const ForeignKey* foreign_key = find_foreign_key(table, column);
+  if (foreign_key != nullptr) {
     if (!is_integer_type(column_data_type)) {
       throw std::runtime_error("Foreign key column '" + column.get_column_name() +
                                "' must use an integer type for v0.1 generation");
     }
-    IntGenerator generator(1);
+
+    const auto referenced_row_count = row_counts.find(foreign_key->referenced_table);
+    if (referenced_row_count == row_counts.end() || referenced_row_count->second <= 0) {
+      throw std::runtime_error("Referenced table '" + foreign_key->referenced_table +
+                               "' has no rows available for foreign key generation");
+    }
+
+    IntGenerator generator(1, referenced_row_count->second);
     return generator.generate(num_rows);
   }
 
@@ -94,30 +105,50 @@ std::vector<Data> GenerationPlan::generate_column_data(const Column& column, con
   throw std::runtime_error("Unsupported data type for column '" + column.get_column_name() + "'");
 }
 
-std::vector<ColumnData> GenerationPlan::generate_columns_data(const Table& table, int num_rows) {
+std::vector<ColumnData> GenerationPlan::generate_columns_data(
+    const Table& table, int num_rows, const std::unordered_map<std::string, int>& row_counts) {
   std::vector<ColumnData> column_data;
   const auto columns = table.get_columns();
   column_data.reserve(columns.size());
   for (const auto& column : columns) {
-    column_data.push_back(ColumnData{
-        .column = column, .data = std::move(generate_column_data(column, table, num_rows))});
+    column_data.push_back(
+        ColumnData{.column = column,
+                   .data = std::move(generate_column_data(column, table, num_rows, row_counts))});
   }
   return column_data;
 }
 
 std::vector<TableData> GenerationPlan::generate_table_data(const std::vector<Table>& tables,
                                                            int num_rows) {
-  TopologicalTableSortResult sort_result = DependencyGraph::sort_tables(tables);
-  if (sort_result.has_cycle) {
-    throw std::runtime_error(
-        "Cannot generate table data because the schema has a dependency cycle");
+  std::unordered_map<std::string, int> row_counts;
+  row_counts.reserve(tables.size());
+  for (const auto& table : tables) {
+    row_counts[table.get_table_name()] = num_rows;
   }
 
+  return generate_table_data(tables, row_counts, num_rows);
+}
+
+std::vector<TableData> GenerationPlan::generate_table_data(
+    const std::vector<Table>& tables, const std::unordered_map<std::string, int>& row_counts,
+    int default_num_rows) {
   std::vector<TableData> table_data;
-  table_data.reserve(sort_result.tables.size());
-  for (const auto& table : sort_result.tables) {
-    table_data.push_back(TableData{.table_name = table.get_table_name(),
-                                   .columns = std::move(generate_columns_data(table, num_rows))});
+  table_data.reserve(tables.size());
+  for (const auto& table : tables) {
+    int num_rows = default_num_rows;
+    const auto row_count = row_counts.find(table.get_table_name());
+    if (row_count != row_counts.end()) {
+      num_rows = row_count->second;
+    }
+
+    if (num_rows < 0) {
+      throw std::runtime_error("Row count cannot be negative for table '" + table.get_table_name() +
+                               "'");
+    }
+
+    table_data.push_back(
+        TableData{.table_name = table.get_table_name(),
+                  .columns = std::move(generate_columns_data(table, num_rows, row_counts))});
   }
   return table_data;
 }

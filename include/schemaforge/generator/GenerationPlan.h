@@ -2,6 +2,7 @@
 #pragma once
 #include <ostream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "schemaforge/generator/BooleanGenerator.h"
@@ -25,11 +26,16 @@ struct TableData {
 class GenerationPlan {
  private:
   static std::vector<Data> generate_column_data(const Column& column, const Table& table,
-                                                int num_rows);
-  static std::vector<ColumnData> generate_columns_data(const Table& table, int num_rows);
+                                                int num_rows,
+                                                const std::unordered_map<std::string, int>& row_counts);
+  static std::vector<ColumnData> generate_columns_data(
+      const Table& table, int num_rows, const std::unordered_map<std::string, int>& row_counts);
 
  public:
   static std::vector<TableData> generate_table_data(const std::vector<Table>& tables, int num_rows);
+  static std::vector<TableData> generate_table_data(
+      const std::vector<Table>& tables, const std::unordered_map<std::string, int>& row_counts,
+      int default_num_rows);
 };
 
 std::ostream& operator<<(std::ostream& os, const ColumnData& column_data);
