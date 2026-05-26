@@ -1,115 +1,23 @@
 #include "schemaforge/generator/GenerationPlan.h"
 
-#include <algorithm>
 #include <stdexcept>
+
+#include "schemaforge/generator/ValueGenerator.h"
 
 namespace schemaforge {
 
-namespace {
-
-bool contains_column(const std::vector<std::string>& column_names, const std::string& column_name) {
-  return std::ranges::find(column_names, column_name) != column_names.end();
-}
-
-bool has_constraint(const Table& table, const Column& column, ConstraintType constraint_type) {
-  const auto column_name = column.get_column_name();
-  for (const auto& constraint : table.get_table_constraints()) {
-    if (constraint.type == constraint_type &&
-        contains_column(constraint.columnNames, column_name)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const ForeignKey* find_foreign_key(const Table& table, const Column& column) {
-  const auto column_name = column.get_column_name();
-  for (const auto& foreign_key : table.get_foreign_keys()) {
-    if (contains_column(foreign_key.local_columns, column_name)) {
-      return &foreign_key;
-    }
-  }
-  return nullptr;
-}
-
-bool is_integer_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT;
-}
-
-bool is_text_type(DataType data_type) {
-  return data_type == DataType::TEXT || data_type == DataType::VARCHAR;
-}
-
-bool is_decimal_type(DataType data_type) {
-  return data_type == DataType::DECIMAL || data_type == DataType::FLOAT ||
-         data_type == DataType::DOUBLE || data_type == DataType::REAL;
-}
-
-}  // namespace
-
-std::vector<Data> GenerationPlan::generate_column_data(const Column& column, const Table& table,
-                                                       int num_rows,
-                                                       const GenerationConfig& config) {
-  const auto column_data_type = column.get_column_type().data_type;
-
-  if (has_constraint(table, column, ConstraintType::PrimaryKey)) {
-    if (!is_integer_type(column_data_type)) {
-      throw std::runtime_error("Primary key column '" + column.get_column_name() +
-                               "' must use an integer type for v0.1 generation");
-    }
-    IntGenerator generator(1);
-    return generator.generate(num_rows);
-  }
-
-  const ForeignKey* foreign_key = find_foreign_key(table, column);
-  if (foreign_key != nullptr) {
-    if (!is_integer_type(column_data_type)) {
-      throw std::runtime_error("Foreign key column '" + column.get_column_name() +
-                               "' must use an integer type for v0.1 generation");
-    }
-
-    const int referenced_row_count = config.get_row_count(foreign_key->referenced_table);
-    if (referenced_row_count <= 0) {
-      throw std::runtime_error("Referenced table '" + foreign_key->referenced_table +
-                               "' has no rows available for foreign key generation");
-    }
-
-    IntGenerator generator(1, referenced_row_count);
-    return generator.generate(num_rows);
-  }
-
-  if (is_integer_type(column_data_type)) {
-    IntGenerator generator(1);
-    return generator.generate(num_rows);
-  }
-
-  if (is_text_type(column_data_type)) {
-    TextGenerator generator(column.get_column_name());
-    return generator.generate(num_rows);
-  }
-
-  if (is_decimal_type(column_data_type)) {
-    DecimalGenerator generator(column.get_column_name());
-    return generator.generate(num_rows);
-  }
-
-  if (column_data_type == DataType::BOOLEAN) {
-    BooleanGenerator generator;
-    return generator.generate(num_rows);
-  }
-
-  throw std::runtime_error("Unsupported data type for column '" + column.get_column_name() + "'");
-}
-
 std::vector<ColumnData> GenerationPlan::generate_columns_data(const Table& table, int num_rows,
-                                                              const GenerationConfig& config) {
+                                                              const GenerationConfig& config,
+                                                              RandomEngine& random_engine,
+                                                              const KeyRegistry& key_registry) {
   std::vector<ColumnData> column_data;
   const auto columns = table.get_columns();
   column_data.reserve(columns.size());
   for (const auto& column : columns) {
-    column_data.push_back(
-        ColumnData{.column = column,
-                   .data = std::move(generate_column_data(column, table, num_rows, config))});
+    column_data.push_back(ColumnData{
+        .column = column,
+        .data = std::move(ValueGenerator::generate_column_data(
+            column, table, num_rows, config, random_engine, key_registry))});
   }
   return column_data;
 }
@@ -129,6 +37,8 @@ std::vector<TableData> GenerationPlan::generate_table_data(const std::vector<Tab
                                                            const GenerationConfig& config) {
   std::vector<TableData> table_data;
   table_data.reserve(tables.size());
+  RandomEngine random_engine(config.seed);
+  const KeyRegistry key_registry = KeyRegistry::build_from_tables(tables, config);
   for (const auto& table : tables) {
     const int num_rows = config.get_row_count(table.get_table_name());
     if (num_rows < 0) {
@@ -136,9 +46,10 @@ std::vector<TableData> GenerationPlan::generate_table_data(const std::vector<Tab
                                "'");
     }
 
-    table_data.push_back(
-        TableData{.table_name = table.get_table_name(),
-                  .columns = std::move(generate_columns_data(table, num_rows, config))});
+    table_data.push_back(TableData{
+        .table_name = table.get_table_name(),
+        .columns = std::move(generate_columns_data(table, num_rows, config, random_engine,
+                                                   key_registry))});
   }
   return table_data;
 }
