@@ -14,6 +14,7 @@ add_executable(schemaforge
     src/schema/Table.cpp
     src/schema/Column.cpp
     src/validation/SchemaValidator.cpp
+    src/validation/CapacityAnalyzer.cpp
     src/validation/GenerationFeasibilityValidator.cpp
     src/validation/SQLiteValidator.cpp
     src/graph/DependencyGraph.cpp

@@ -4,6 +4,7 @@
 
 #include "schemaforge/generator/GenerationConfig.h"
 #include "schemaforge/schema/Table.h"
+#include "schemaforge/validation/CapacityAnalyzer.h"
 #include "schemaforge/validation/SchemaValidator.h"
 
 namespace schemaforge {
@@ -19,6 +20,9 @@ class GenerationFeasibilityValidator {
 
  public:
   GenerationFeasibilityValidator() = default;
+  static ValidationResult validate(const std::vector<Table>& tables,
+                                   const GenerationConfig& config,
+                                   const SchemaCapacityInfo& capacity_info);
   static ValidationResult validate(const std::vector<Table>& tables,
                                    const GenerationConfig& config);
 };

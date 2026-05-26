@@ -1,0 +1,4 @@
+CREATE TABLE flags (
+  id INT PRIMARY KEY,
+  active BOOLEAN UNIQUE
+);
