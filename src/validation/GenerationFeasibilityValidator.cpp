@@ -4,6 +4,36 @@
 
 namespace schemaforge {
 
+namespace {
+
+const Table* find_table(const std::vector<Table>& tables, const std::string& table_name) {
+  const auto table = std::ranges::find_if(tables, [&table_name](const Table& candidate) {
+    return candidate.get_table_name() == table_name;
+  });
+
+  if (table == tables.end()) {
+    return nullptr;
+  }
+
+  return &*table;
+}
+
+const Column* find_column(const Table& table, const std::string& column_name,
+                          std::vector<Column>& columns) {
+  columns = table.get_columns();
+  const auto column = std::ranges::find_if(columns, [&column_name](const Column& candidate) {
+    return candidate.get_column_name() == column_name;
+  });
+
+  if (column == columns.end()) {
+    return nullptr;
+  }
+
+  return &*column;
+}
+
+}  // namespace
+
 bool GenerationFeasibilityValidator::contains_column(const std::vector<std::string>& column_names,
                                                      const std::string& column_name) {
   return std::ranges::find(column_names, column_name) != column_names.end();
@@ -74,11 +104,36 @@ ValidationResult GenerationFeasibilityValidator::validate(const std::vector<Tabl
 
     for (const auto& foreign_key : table.get_foreign_keys()) {
       const int referenced_rows = config.get_row_count(foreign_key.referenced_table);
+      if (foreign_key.local_columns.size() != 1 || foreign_key.referenced_columns.size() != 1) {
+        validation_result.is_valid = false;
+        validation_result.errors.push_back(
+            "Composite foreign key generation is not supported for v0.1 in table '" +
+            table.get_table_name() + "'");
+        continue;
+      }
+
       if (table_rows > 0 && referenced_rows <= 0) {
         validation_result.is_valid = false;
         validation_result.errors.push_back(
             "Cannot generate " + table.get_table_name() + ": it references table '" +
             foreign_key.referenced_table + "', but that table has 0 rows");
+      }
+
+      const Table* referenced_table = find_table(tables, foreign_key.referenced_table);
+      if (referenced_table != nullptr) {
+        std::vector<Column> referenced_columns;
+        const Column* referenced_column =
+            find_column(*referenced_table, foreign_key.referenced_columns.front(),
+                        referenced_columns);
+
+        if (referenced_column != nullptr &&
+            !is_integer_type(referenced_column->get_column_type().data_type)) {
+          validation_result.is_valid = false;
+          validation_result.errors.push_back(
+              "Referenced foreign key column '" + foreign_key.referenced_table + "." +
+              foreign_key.referenced_columns.front() +
+              "' must use INT or BIGINT for v0.1 generation");
+        }
       }
 
       for (const auto& local_column_name : foreign_key.local_columns) {
@@ -93,6 +148,17 @@ ValidationResult GenerationFeasibilityValidator::validate(const std::vector<Tabl
           validation_result.errors.push_back("Foreign key column '" + table.get_table_name() + "." +
                                              local_column_name +
                                              "' must use INT or BIGINT for v0.1 generation");
+        }
+
+        if (column != columns.end() &&
+            has_constraint(table, *column, ConstraintType::Unique) &&
+            table_rows > referenced_rows) {
+          validation_result.is_valid = false;
+          validation_result.errors.push_back(
+              "Cannot generate " + std::to_string(table_rows) + " rows for UNIQUE foreign key '" +
+              table.get_table_name() + "." + local_column_name + "' because referenced table '" +
+              foreign_key.referenced_table + "' has only " + std::to_string(referenced_rows) +
+              " rows");
         }
       }
     }

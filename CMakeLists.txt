@@ -18,6 +18,8 @@ add_executable(schemaforge
     src/validation/SQLiteValidator.cpp
     src/graph/DependencyGraph.cpp
     src/generator/GenerationPlan.cpp
+    src/generator/KeyRegistry.cpp
+    src/generator/ValueGenerator.cpp
     src/generator/BooleanGenerator.cpp
     src/generator/DecimalGenerator.cpp
     src/generator/IntGenerator.cpp
