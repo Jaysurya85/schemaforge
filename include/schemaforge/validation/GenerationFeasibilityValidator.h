@@ -3,7 +3,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "schemaforge/generator/GenerationConfig.h"
+#include "schemaforge/config/GenerationConfig.h"
 #include "schemaforge/schema/Table.h"
 #include "schemaforge/validation/CapacityAnalyzer.h"
 #include "schemaforge/validation/SchemaValidator.h"

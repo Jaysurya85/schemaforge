@@ -1,6 +1,5 @@
 #include "schemaforge/generator/KeyRegistry.h"
 
-#include <algorithm>
 #include <functional>
 #include <stdexcept>
 
@@ -47,8 +46,7 @@ std::size_t KeyRegistry::KeyRefHash::operator()(const KeyRef& key) const {
   return hash;
 }
 
-KeyRegistry::KeyRef KeyRegistry::make_key(const Table* table,
-                                          const std::vector<Column*>& columns) {
+KeyRegistry::KeyRef KeyRegistry::make_key(const Table* table, const std::vector<Column*>& columns) {
   std::vector<const Column*> key_columns;
   key_columns.reserve(columns.size());
   for (const Column* column : columns) {
