@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace schemaforge {
 
@@ -9,13 +10,13 @@ struct GenerationConfig {
   unsigned int seed{42};
   std::unordered_map<std::string, int> table_row_counts;
 
-  [[nodiscard]] int get_row_count(const std::string& table_name) const {
-    const auto row_count = table_row_counts.find(table_name);
-    if (row_count == table_row_counts.end()) {
-      return default_num_rows;
-    }
-    return row_count->second;
-  }
+  static GenerationConfig make_default();
+
+  [[nodiscard]] bool apply_cli_args(int argc, char* argv[], std::string& schema_path);
+  [[nodiscard]] int get_row_count(const std::string& table_name) const;
+  [[nodiscard]] bool apply_option(const std::string& option, const std::string& value);
+  void write_context_file(const std::vector<std::string>& table_order,
+                          const std::string& path = "context.yaml") const;
 };
 
 }  // namespace schemaforge

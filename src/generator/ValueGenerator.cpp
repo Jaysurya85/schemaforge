@@ -14,29 +14,26 @@ namespace schemaforge {
 
 namespace {
 
-bool contains_column(const std::vector<std::string>& column_names, const std::string& column_name) {
-  return std::ranges::find(column_names, column_name) != column_names.end();
+bool contains_column(const std::vector<Column*>& columns, const Column* column) {
+  return std::ranges::find(columns, column) != columns.end();
 }
 
 bool has_constraint(const Table& table, const Column& column, ConstraintType constraint_type) {
-  const auto column_name = column.get_column_name();
   for (const auto& constraint : table.get_table_constraints()) {
-    if (constraint.type == constraint_type &&
-        contains_column(constraint.columnNames, column_name)) {
+    if (constraint.type == constraint_type && contains_column(constraint.columns, &column)) {
       return true;
     }
   }
   return false;
 }
 
-std::optional<ForeignKey> find_foreign_key(const Table& table, const Column& column) {
-  const auto column_name = column.get_column_name();
+const ForeignKey* find_foreign_key(const Table& table, const Column& column) {
   for (const auto& foreign_key : table.get_foreign_keys()) {
-    if (contains_column(foreign_key.local_columns, column_name)) {
-      return foreign_key;
+    if (contains_column(foreign_key.local_columns, &column)) {
+      return &foreign_key;
     }
   }
-  return std::nullopt;
+  return nullptr;
 }
 
 bool is_integer_type(DataType data_type) {
@@ -106,10 +103,13 @@ std::vector<Data> ValueGenerator::generate_column_data(const Column& column, con
     return generator.generate(num_rows);
   }
 
-  const std::optional<ForeignKey> foreign_key = find_foreign_key(table, column);
-  if (foreign_key.has_value()) {
+  const ForeignKey* foreign_key = find_foreign_key(table, column);
+  if (foreign_key != nullptr) {
     if (foreign_key->local_columns.size() != 1 || foreign_key->referenced_columns.size() != 1) {
-      throw std::runtime_error("Composite foreign keys are not supported for v0.1 generation");
+      throw std::runtime_error("Composite foreign keys are not supported for v0.1 generation " +
+                               std::to_string(foreign_key->local_columns.size()) + " local, " +
+                               std::to_string(foreign_key->referenced_columns.size()) +
+                               " referenced");
     }
 
     if (!is_integer_type(column_data_type)) {

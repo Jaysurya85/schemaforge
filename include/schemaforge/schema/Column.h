@@ -38,7 +38,7 @@ class Column {
   bool nullable{true};
 
  public:
-  Column(const std::string& column_name, ColumnType column_type, bool nullable = true);
+  Column(std::string column_name, ColumnType column_type, bool nullable = true);
   [[nodiscard]] std::string get_column_name() const;
   [[nodiscard]] ColumnType get_column_type() const;
   [[nodiscard]] bool is_nullable() const;
