@@ -1,9 +1,11 @@
 #include "schemaforge/schema/Column.h"
 
+#include <utility>
+
 namespace schemaforge {
 
-Column::Column(const std::string& column_name, ColumnType column_type, bool nullable)
-    : column_name(column_name), column_type(column_type), nullable(nullable) {}
+Column::Column(std::string column_name, ColumnType column_type, bool nullable)
+    : column_name(std::move(column_name)), column_type(column_type), nullable(nullable) {}
 std::string Column::get_column_name() const { return column_name; };
 ColumnType Column::get_column_type() const { return column_type; };
 bool Column::is_nullable() const { return nullable; }

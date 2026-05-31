@@ -1,8 +1,8 @@
-#include <exception>
 #include <iostream>
 #include <string>
 #include <vector>
 
+#include "schemaforge/generator/GenerationConfig.h"
 #include "schemaforge/generator/GenerationPlan.h"
 #include "schemaforge/graph/DependencyGraph.h"
 #include "schemaforge/io/FileReader.h"
@@ -14,76 +14,12 @@
 #include "schemaforge/validation/SQLiteValidator.h"
 #include "schemaforge/validation/SchemaValidator.h"
 
-namespace {
-
-schemaforge::GenerationConfig make_default_generation_config() {
-  schemaforge::GenerationConfig generation_config;
-  generation_config.default_num_rows = 10;
-  generation_config.seed = 42;
-  generation_config.table_row_counts = {{"users", 10}, {"orders", 25}};
-  return generation_config;
-}
-
-auto apply_generation_option(schemaforge::GenerationConfig& generation_config,
-                             const std::string& option, const std::string& value) -> bool {
-  try {
-    if (option == "--default-rows") {
-      generation_config.default_num_rows = std::stoi(value);
-      return true;
-    }
-
-    if (option == "--seed") {
-      generation_config.seed = static_cast<unsigned int>(std::stoul(value));
-      return true;
-    }
-
-    if (option == "--rows") {
-      const std::size_t separator = value.find('=');
-      if (separator == std::string::npos || separator == 0 || separator + 1 >= value.size()) {
-        std::cerr << "Expected --rows table=count, got: " << value << '\n';
-        return false;
-      }
-
-      const std::string table_name = value.substr(0, separator);
-      const int row_count = std::stoi(value.substr(separator + 1));
-      generation_config.table_row_counts[table_name] = row_count;
-      return true;
-    }
-  } catch (const std::exception& error) {
-    std::cerr << "Invalid value for " << option << ": " << value << " (" << error.what()
-              << ")\n";
-    return false;
-  }
-
-  return false;
-}
-
-}  // namespace
-
 auto main(int argc, char* argv[]) -> int {
   std::string schema_path = "schema.sql";
-  schemaforge::GenerationConfig generation_config = make_default_generation_config();
+  schemaforge::GenerationConfig generation_config = schemaforge::GenerationConfig::make_default();
 
-  for (int arg_index = 1; arg_index < argc; ++arg_index) {
-    const std::string argument = argv[arg_index];
-    if (argument == "--default-rows" || argument == "--seed" || argument == "--rows") {
-      if (arg_index + 1 >= argc) {
-        std::cerr << "Missing value for " << argument << '\n';
-        return 1;
-      }
-
-      if (!apply_generation_option(generation_config, argument, argv[++arg_index])) {
-        return 1;
-      }
-      continue;
-    }
-
-    if (!argument.empty() && argument.starts_with("--")) {
-      std::cerr << "Unknown option: " << argument << '\n';
-      return 1;
-    }
-
-    schema_path = argument;
+  if (!generation_config.apply_cli_args(argc, argv, schema_path)) {
+    return 1;
   }
 
   std::string sql = schemaforge::FileReader::read_file(schema_path);
@@ -92,17 +28,19 @@ auto main(int argc, char* argv[]) -> int {
   std::cout << "Schema file: " << schema_path << '\n';
   std::cout << "Parsing SQL:\n" << sql << "\n\n";
 
-  std::vector<schemaforge::Table> tables = schemaforge::ParserAdapter::parse(sql);
+  std::vector<schemaforge::TablePtr> tables = schemaforge::ParserAdapter::parse(sql);
   schemaforge::ValidationResult validation_result = schemaforge::SchemaValidator::validate(tables);
-
-  std::cout << tables.size() << " tables parsed.\n";
-  for (const auto& table : tables) {
-    std::cout << table << "\n\n";
-  }
 
   std::cout << validation_result << "\n";
   if (!validation_result.is_valid) {
     return 1;
+  }
+
+  schemaforge::ParserAdapter::foreign_key_resolver(tables);
+
+  std::cout << tables.size() << " tables parsed.\n";
+  for (const auto& table : tables) {
+    std::cout << *table << "\n\n";
   }
 
   auto dependency_graph = schemaforge::DependencyGraph();
@@ -115,18 +53,24 @@ auto main(int argc, char* argv[]) -> int {
     return 1;
   }
 
+  std::vector<schemaforge::TablePtr> sorted_tables =
+      schemaforge::DependencyGraph::get_sorted_tables(std::move(tables), table_sort_result.order);
+
   std::cout << dependency_graph << "\n";
+
   std::cout << "Topologically sorted tables:\n";
-  for (const auto& table : table_sort_result.tables) {
-    std::cout << table << "\n\n";
+  for (const auto& table_ptr : sorted_tables) {
+    std::cout << table_ptr->get_table_name() << "\n";
   }
 
-  schemaforge::SchemaCapacityInfo capacity_info =
-      schemaforge::CapacityAnalyzer::analyze(table_sort_result.tables);
+  generation_config.write_context_file(table_sort_result.order);
 
+  schemaforge::SchemaCapacityInfo capacity_info =
+      schemaforge::CapacityAnalyzer::analyze(sorted_tables, generation_config);
+
+  schemaforge::GenerationFeasibilityValidator validator(capacity_info);
   schemaforge::ValidationResult generation_validation_result =
-      schemaforge::GenerationFeasibilityValidator::validate(table_sort_result.tables,
-                                                            generation_config, capacity_info);
+      validator.validate(sorted_tables, generation_config, capacity_info);
 
   std::cout << "Generation " << generation_validation_result << "\n";
   if (!generation_validation_result.is_valid) {
@@ -134,7 +78,7 @@ auto main(int argc, char* argv[]) -> int {
   }
 
   std::vector<schemaforge::TableData> table_data =
-      schemaforge::GenerationPlan::generate_table_data(table_sort_result.tables, generation_config);
+      schemaforge::GenerationPlan::generate_table_data(sorted_tables, generation_config);
 
   std::cout << "Generated table data:\n";
   for (const auto& table : table_data) {

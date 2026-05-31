@@ -29,18 +29,18 @@ void DependencyGraph::add_dependency(const TableId& from, const TableId& to) {
   in_degree[to]++;
 }
 
-void DependencyGraph::make_graph(const std::vector<Table>& tables) {
+void DependencyGraph::make_graph(const std::vector<TablePtr>& tables) {
   graph.clear();
   in_degree.clear();
   table_order.clear();
 
-  for (const auto& table : tables) {
-    add_table(table.get_table_name());
+  for (const auto& table_ptr : tables) {
+    add_table(table_ptr->get_table_name());
   }
 
-  for (const auto& table : tables) {
-    for (const auto& foreign_key : table.get_foreign_keys()) {
-      add_dependency(foreign_key.referenced_table, table.get_table_name());
+  for (const auto& table_ptr : tables) {
+    for (const auto& foreign_key_spec : table_ptr->get_foreign_key_specs()) {
+      add_dependency(foreign_key_spec.referenced_table, table_ptr->get_table_name());
     }
   }
 }
@@ -82,31 +82,36 @@ TopologicalSortResult DependencyGraph::topological_sort() const {
 }
 
 TopologicalTableSortResult DependencyGraph::topological_sort_tables(
-    const std::vector<Table>& tables) const {
+    const std::vector<TablePtr>& tables) const {
   TopologicalSortResult sort_result = topological_sort();
-  std::unordered_map<TableId, Table> table_by_name;
-  table_by_name.reserve(tables.size());
-  for (auto table : tables) {
-    table_by_name.emplace(table.get_table_name(), std::move(table));
-  }
 
-  std::vector<Table> sorted_tables;
-  sorted_tables.reserve(sort_result.order.size());
-  for (const auto& table_name : sort_result.order) {
-    const auto table = table_by_name.find(table_name);
-    if (table == table_by_name.end()) {
-      throw std::runtime_error("Table '" + table_name + "' was not found while sorting tables");
-    }
-    sorted_tables.push_back(std::move(table->second));
-  }
-
-  return {sort_result.has_cycle, std::move(sort_result.order), std::move(sorted_tables)};
+  return {sort_result.has_cycle, std::move(sort_result.order)};
 }
 
-TopologicalTableSortResult DependencyGraph::sort_tables(const std::vector<Table>& tables) {
+TopologicalTableSortResult DependencyGraph::sort_tables(const std::vector<TablePtr>& tables) {
   DependencyGraph dependency_graph;
   dependency_graph.make_graph(tables);
   return dependency_graph.topological_sort_tables(tables);
+}
+
+std::vector<TablePtr> DependencyGraph::get_sorted_tables(
+    std::vector<TablePtr> tables, const std::vector<TableId>& sorted_table_ids) {
+  std::unordered_map<TableId, std::size_t> table_map;
+  for (int i = 0; i < tables.size(); i++) {
+    table_map[tables[i]->get_table_name()] = i;
+  }
+
+  std::vector<TablePtr> sorted_tables;
+  for (const auto& table_id : sorted_table_ids) {
+    auto it = table_map.find(table_id);
+    if (it != table_map.end()) {
+      sorted_tables.push_back(std::move(tables[it->second]));
+    } else {
+      throw std::runtime_error("Table ID not found: " + table_id);
+    }
+  }
+
+  return sorted_tables;
 }
 
 std::ostream& operator<<(std::ostream& os, const DependencyGraph& dependency_graph) {

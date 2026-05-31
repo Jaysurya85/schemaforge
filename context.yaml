@@ -1,0 +1,8 @@
+generation:
+  seed: 42
+  default_num_rows: 10
+tables:
+  users:
+    rows: 10
+  orders:
+    rows: 25

@@ -14,12 +14,12 @@
 
 namespace schemaforge {
 struct ColumnData {
-  Column column;
+  const Column* column;
   std::vector<Data> data;
 };
 
 struct TableData {
-  std::string table_name;
+  const Table* table;
   std::vector<ColumnData> columns;
 };
 
@@ -30,11 +30,12 @@ class GenerationPlan {
       RandomEngine& random_engine, const KeyRegistry& key_registry);
 
  public:
-  static std::vector<TableData> generate_table_data(const std::vector<Table>& tables, int num_rows);
-  static std::vector<TableData> generate_table_data(const std::vector<Table>& tables,
+  static std::vector<TableData> generate_table_data(const std::vector<TablePtr>& tables,
+                                                    int num_rows);
+  static std::vector<TableData> generate_table_data(const std::vector<TablePtr>& tables,
                                                     const GenerationConfig& config);
   static std::vector<TableData> generate_table_data(
-      const std::vector<Table>& tables, const std::unordered_map<std::string, int>& row_counts,
+      const std::vector<TablePtr>& tables, const std::unordered_map<std::string, int>& row_counts,
       int default_num_rows);
 };
 

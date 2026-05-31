@@ -3,7 +3,8 @@
 #include <string>
 #include <vector>
 
-#include "../schema/Table.h"
+#include "schemaforge/schema/Column.h"
+#include "schemaforge/schema/Table.h"
 #include "sql/ColumnType.h"
 #include "sql/CreateStatement.h"
 
@@ -17,38 +18,49 @@ class ParserAdapter {
 
   static ConstraintType convert_constraint_type(const hsql::ConstraintType& constraint_type);
 
-  static TableConstraint convert_table_constraint(const hsql::TableConstraint* table_constraint);
+  static TableConstraint convert_table_constraint(const hsql::TableConstraint* table_constraint,
+                                                  const std::vector<ColumnPtr>& columns);
+
+  static Column* find_column_by_name(const std::string& name,
+                                     const std::vector<ColumnPtr>& columns);
+
+  static Table* find_table_by_name(const std::string& name, const std::vector<TablePtr>& tables);
 
   static std::vector<TableConstraint> extract_table_constraints(
-      const hsql::CreateStatement* create_stmt);
+      const hsql::CreateStatement* create_stmt, const std::vector<ColumnPtr>& columns);
 
   [[nodiscard]] static bool should_store_as_table_constraint(TableConstraint& table_contraint);
 
   static std::vector<TableConstraint> extract_column_constraints(
+      const hsql::CreateStatement* create_stmt, const std::vector<ColumnPtr>& columns);
+
+  static std::vector<TableConstraint> convert_constraints(const hsql::CreateStatement* create_stmt,
+                                                          const std::vector<ColumnPtr>& columns);
+
+  static ForeignKeySpec convert_foreign_key_spec(
+      const hsql::ForeignKeyConstraint* foreign_key_constraint);
+
+  static std::vector<ForeignKeySpec> extract_table_foreign_keys_spec(
       const hsql::CreateStatement* create_stmt);
 
-  static std::vector<TableConstraint> convert_constraints(const hsql::CreateStatement* create_stmt);
-
-  static ForeignKey convert_foreign_key(const hsql::ForeignKeyConstraint* foreign_key_constraint);
-
-  static std::vector<ForeignKey> extract_table_foreign_keys(
+  static std::vector<ForeignKeySpec> extract_column_foreign_keys_spec(
       const hsql::CreateStatement* create_stmt);
 
-  static std::vector<ForeignKey> extract_column_foreign_keys(
+  static std::vector<ForeignKeySpec> extract_foreign_keys_spec(
       const hsql::CreateStatement* create_stmt);
-
-  static std::vector<ForeignKey> extract_foreign_keys(const hsql::CreateStatement* create_stmt);
 
   static std::vector<std::string> convert_names(const std::vector<char*>* names);
 
   static Column convert_column(const hsql::ColumnDefinition* col);
 
-  static std::vector<Column> convert_columns(const hsql::CreateStatement* create_stmt);
+  static std::vector<ColumnPtr> convert_columns(const hsql::CreateStatement* create_stmt);
 
   static Table convert_create_statement(const hsql::CreateStatement* create_stmt);
 
  public:
-  static std::vector<Table> parse(const std::string& sql);
+  static std::vector<TablePtr> parse(const std::string& sql);
+
+  static void foreign_key_resolver(std::vector<TablePtr>& tables);
 };
 
 }  // namespace schemaforge

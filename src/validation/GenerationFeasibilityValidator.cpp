@@ -4,215 +4,136 @@
 
 namespace schemaforge {
 
-namespace {
-
-bool contains_column_name(const std::vector<std::string>& column_names,
-                          const std::string& column_name) {
-  return std::ranges::find(column_names, column_name) != column_names.end();
+GenerationFeasibilityValidator::GenerationFeasibilityValidator(
+    const SchemaCapacityInfo& capacity_info) {
+  load_capacity_info(capacity_info);
 }
 
-bool column_has_constraint(const Table& table, const Column& column,
-                           ConstraintType constraint_type) {
-  const auto column_name = column.get_column_name();
-  for (const auto& constraint : table.get_table_constraints()) {
-    if (constraint.type == constraint_type &&
-        contains_column_name(constraint.columnNames, column_name)) {
+void GenerationFeasibilityValidator::load_capacity_info(const SchemaCapacityInfo& capacity_info) {
+  table_capacity_info.clear();
+  table_capacity_info.reserve(capacity_info.tables.size());
+  for (const auto& table_info : capacity_info.tables) {
+    table_capacity_info.emplace(table_info.table_id, table_info);
+  }
+}
+
+bool GenerationFeasibilityValidator::contains_column(const std::vector<Column*>& columns,
+                                                     const Column* column) {
+  return std::ranges::find(columns, column) != columns.end();
+}
+
+bool GenerationFeasibilityValidator::has_matching_constraint(const Table* table,
+                                                             const std::vector<Column*>& columns,
+                                                             ConstraintType constraint_type) {
+  for (const auto& constraint : table->get_table_constraints()) {
+    if (constraint.type != constraint_type || constraint.columns.size() != columns.size()) {
+      continue;
+    }
+
+    const bool all_columns_match =
+        std::ranges::all_of(columns, [&constraint, this](const Column* column) {
+          return contains_column(constraint.columns, column);
+        });
+    if (all_columns_match) {
       return true;
     }
   }
+
   return false;
 }
 
-const Table* find_table(const std::vector<Table>& tables, const std::string& table_name) {
-  const auto table = std::ranges::find_if(tables, [&table_name](const Table& candidate) {
-    return candidate.get_table_name() == table_name;
-  });
+bool GenerationFeasibilityValidator::has_unique_key_constraint(
+    const Table* table, const std::vector<Column*>& columns) {
+  return has_matching_constraint(table, columns, ConstraintType::Unique) ||
+         has_matching_constraint(table, columns, ConstraintType::PrimaryKey);
+}
 
-  if (table == tables.end()) {
-    return nullptr;
+void GenerationFeasibilityValidator::apply_capacity_limit(ValidationResult& validation_result,
+                                                          TableCapacityInfo& table_info,
+                                                          int max_rows, const std::string& reason) {
+  if (max_rows >= table_info.max_rows) {
+    return;
   }
 
-  return &*table;
+  table_info.max_rows = max_rows;
+  table_info.reasons.push_back(reason);
+  validate_table_capacity(validation_result, table_info);
 }
 
-const Column* find_column(const Table& table, const std::string& column_name,
-                          std::vector<Column>& columns) {
-  columns = table.get_columns();
-  const auto column = std::ranges::find_if(columns, [&column_name](const Column& candidate) {
-    return candidate.get_column_name() == column_name;
-  });
-
-  if (column == columns.end()) {
-    return nullptr;
-  }
-
-  return &*column;
-}
-
-RowCapacityLimit unique_foreign_key_capacity(
-    const Table& table, const Column& column, const ForeignKey& foreign_key, int referenced_rows) {
-  return RowCapacityLimit{
-      .max_rows = referenced_rows,
-      .reason = "UNIQUE foreign key '" + table.get_table_name() + "." +
-                column.get_column_name() + "' because referenced table '" +
-                foreign_key.referenced_table + "' has only " + std::to_string(referenced_rows) +
-                " rows"};
-}
-
-void validate_capacity_limit(ValidationResult& validation_result, const std::string& table_name,
-                             int requested_rows, const RowCapacityLimit& limit) {
-  if (requested_rows <= limit.max_rows) {
+void GenerationFeasibilityValidator::validate_table_capacity(
+    ValidationResult& validation_result, const TableCapacityInfo& table_info) const {
+  if (table_info.requested_rows <= table_info.max_rows) {
     return;
   }
 
   validation_result.is_valid = false;
-  validation_result.errors.push_back("Cannot generate " + std::to_string(requested_rows) +
-                                     " rows for table '" + table_name + "': " + limit.reason +
-                                     " limits the table to " +
-                                     std::to_string(limit.max_rows) + " rows");
+  std::string error = "Cannot generate " + std::to_string(table_info.requested_rows) +
+                      " rows for table '" + table_info.table_id + "': max rows is " +
+                      std::to_string(table_info.max_rows);
+  if (!table_info.reasons.empty()) {
+    error += " because " + table_info.reasons.back();
+  }
+  validation_result.errors.push_back(std::move(error));
 }
 
-void validate_static_capacity(ValidationResult& validation_result, const std::string& table_name,
-                              int requested_rows, const SchemaCapacityInfo& capacity_info) {
-  const TableCapacityInfo* table_capacity = capacity_info.find_table(table_name);
-  if (table_capacity == nullptr || !table_capacity->static_max_rows.has_value()) {
+void GenerationFeasibilityValidator::apply_foreign_key_capacity(ValidationResult& validation_result,
+                                                                Table* table) {
+  auto table_info_it = table_capacity_info.find(table->get_table_name());
+  if (table_info_it == table_capacity_info.end()) {
     return;
   }
 
-  validate_capacity_limit(validation_result, table_name, requested_rows,
-                          table_capacity->static_max_rows.value());
-}
-
-}  // namespace
-
-bool GenerationFeasibilityValidator::contains_column(const std::vector<std::string>& column_names,
-                                                     const std::string& column_name) {
-  return std::ranges::find(column_names, column_name) != column_names.end();
-}
-
-bool GenerationFeasibilityValidator::has_constraint(const Table& table, const Column& column,
-                                                    ConstraintType constraint_type) {
-  const auto column_name = column.get_column_name();
-  for (const auto& constraint : table.get_table_constraints()) {
-    if (constraint.type == constraint_type &&
-        contains_column(constraint.columnNames, column_name)) {
-      return true;
+  TableCapacityInfo& table_info = table_info_it->second;
+  for (const auto& foreign_key : table->get_foreign_keys()) {
+    const Table* parent_table = foreign_key.referenced_table;
+    const auto parent_info_it = table_capacity_info.find(parent_table->get_table_name());
+    if (parent_info_it == table_capacity_info.end()) {
+      continue;
     }
+
+    const TableCapacityInfo& parent_info = parent_info_it->second;
+    if (table_info.requested_rows > 0 && parent_info.max_rows <= 0) {
+      validation_result.is_valid = false;
+      validation_result.errors.push_back("Cannot generate " + table_info.table_id +
+                                         ": it references table '" + parent_info.table_id +
+                                         "', but that table has 0 rows");
+      continue;
+    }
+
+    if (!has_unique_key_constraint(table, foreign_key.local_columns)) {
+      continue;
+    }
+
+    const int referenced_key_capacity = parent_info.max_rows;
+    const std::string reason = "UNIQUE foreign key on table '" + table_info.table_id +
+                               "' references table '" + parent_info.table_id + "' with " +
+                               std::to_string(referenced_key_capacity) + " available rows";
+
+    apply_capacity_limit(validation_result, table_info, referenced_key_capacity, reason);
   }
-  return false;
 }
 
-bool GenerationFeasibilityValidator::is_supported_generation_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT ||
-         data_type == DataType::TEXT || data_type == DataType::VARCHAR ||
-         data_type == DataType::DECIMAL || data_type == DataType::FLOAT ||
-         data_type == DataType::DOUBLE || data_type == DataType::REAL ||
-         data_type == DataType::BOOLEAN;
-}
-
-bool GenerationFeasibilityValidator::is_integer_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT;
-}
-
-ValidationResult GenerationFeasibilityValidator::validate(const std::vector<Table>& tables,
-                                                          const GenerationConfig& config,
+ValidationResult GenerationFeasibilityValidator::validate(const std::vector<TablePtr>& tables,
+                                                          const GenerationConfig&,
                                                           const SchemaCapacityInfo& capacity_info) {
   ValidationResult validation_result(true, {});
+  load_capacity_info(capacity_info);
 
-  for (const auto& table : tables) {
-    const int table_rows = config.get_row_count(table.get_table_name());
-    if (table_rows < 0) {
-      validation_result.is_valid = false;
-      validation_result.errors.push_back("Row count cannot be negative for table '" +
-                                         table.get_table_name() + "'");
+  for (const auto& table_ptr : tables) {
+    auto table_info_it = table_capacity_info.find(table_ptr->get_table_name());
+    if (table_info_it != table_capacity_info.end()) {
+      validate_table_capacity(validation_result, table_info_it->second);
     }
 
-    validate_static_capacity(validation_result, table.get_table_name(), table_rows, capacity_info);
-
-    for (const auto& column : table.get_columns()) {
-      const auto data_type = column.get_column_type().data_type;
-      if (!is_supported_generation_type(data_type)) {
-        validation_result.is_valid = false;
-        validation_result.errors.push_back("Column '" + table.get_table_name() + "." +
-                                           column.get_column_name() +
-                                           "' uses an unsupported generation type");
-      }
-
-      if (has_constraint(table, column, ConstraintType::PrimaryKey) &&
-          !is_integer_type(data_type)) {
-        validation_result.is_valid = false;
-        validation_result.errors.push_back("Primary key column '" + table.get_table_name() + "." +
-                                           column.get_column_name() +
-                                           "' must use INT or BIGINT for v0.1 generation");
-      }
-    }
-
-    for (const auto& foreign_key : table.get_foreign_keys()) {
-      const int referenced_rows = config.get_row_count(foreign_key.referenced_table);
-      if (foreign_key.local_columns.size() != 1 || foreign_key.referenced_columns.size() != 1) {
-        validation_result.is_valid = false;
-        validation_result.errors.push_back(
-            "Composite foreign key generation is not supported for v0.1 in table '" +
-            table.get_table_name() + "'");
-        continue;
-      }
-
-      if (table_rows > 0 && referenced_rows <= 0) {
-        validation_result.is_valid = false;
-        validation_result.errors.push_back(
-            "Cannot generate " + table.get_table_name() + ": it references table '" +
-            foreign_key.referenced_table + "', but that table has 0 rows");
-      }
-
-      const Table* referenced_table = find_table(tables, foreign_key.referenced_table);
-      if (referenced_table != nullptr) {
-        std::vector<Column> referenced_columns;
-        const Column* referenced_column =
-            find_column(*referenced_table, foreign_key.referenced_columns.front(),
-                        referenced_columns);
-
-        if (referenced_column != nullptr &&
-            !is_integer_type(referenced_column->get_column_type().data_type)) {
-          validation_result.is_valid = false;
-          validation_result.errors.push_back(
-              "Referenced foreign key column '" + foreign_key.referenced_table + "." +
-              foreign_key.referenced_columns.front() +
-              "' must use INT or BIGINT for v0.1 generation");
-        }
-      }
-
-      for (const auto& local_column_name : foreign_key.local_columns) {
-        const auto columns = table.get_columns();
-        const auto column =
-            std::ranges::find_if(columns, [&local_column_name](const Column& candidate) {
-              return candidate.get_column_name() == local_column_name;
-            });
-
-        if (column != columns.end() && !is_integer_type(column->get_column_type().data_type)) {
-          validation_result.is_valid = false;
-          validation_result.errors.push_back("Foreign key column '" + table.get_table_name() + "." +
-                                             local_column_name +
-                                             "' must use INT or BIGINT for v0.1 generation");
-        }
-
-        if (column != columns.end()) {
-          if (column_has_constraint(table, *column, ConstraintType::Unique)) {
-            const RowCapacityLimit capacity_limit =
-                unique_foreign_key_capacity(table, *column, foreign_key, referenced_rows);
-            validate_capacity_limit(validation_result, table.get_table_name(), table_rows,
-                                    capacity_limit);
-          }
-        }
-      }
-    }
+    apply_foreign_key_capacity(validation_result, table_ptr.get());
   }
 
   return validation_result;
 }
 
-ValidationResult GenerationFeasibilityValidator::validate(const std::vector<Table>& tables,
+ValidationResult GenerationFeasibilityValidator::validate(const std::vector<TablePtr>& tables,
                                                           const GenerationConfig& config) {
-  const SchemaCapacityInfo capacity_info = CapacityAnalyzer::analyze(tables);
+  const SchemaCapacityInfo capacity_info = CapacityAnalyzer::analyze(tables, config);
   return validate(tables, config, capacity_info);
 }
 

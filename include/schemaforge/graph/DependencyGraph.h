@@ -16,11 +16,10 @@ struct TopologicalSortResult {
 };
 
 struct TopologicalTableSortResult {
-  TopologicalTableSortResult(bool has_cycle, std::vector<TableId> order, std::vector<Table> tables)
-      : has_cycle(has_cycle), order(std::move(order)), tables(std::move(tables)) {}
+  TopologicalTableSortResult(bool has_cycle, std::vector<TableId> order)
+      : has_cycle(has_cycle), order(std::move(order)) {}
   bool has_cycle;
   std::vector<TableId> order;
-  std::vector<Table> tables;
 };
 
 class DependencyGraph {
@@ -34,11 +33,13 @@ class DependencyGraph {
 
  public:
   DependencyGraph();
-  void make_graph(const std::vector<Table>& tables);
+  void make_graph(const std::vector<TablePtr>& tables);
   auto& get_graph() const;
   TopologicalSortResult topological_sort() const;
-  TopologicalTableSortResult topological_sort_tables(const std::vector<Table>& tables) const;
-  static TopologicalTableSortResult sort_tables(const std::vector<Table>& tables);
+  TopologicalTableSortResult topological_sort_tables(const std::vector<TablePtr>& tables) const;
+  static TopologicalTableSortResult sort_tables(const std::vector<TablePtr>& tables);
+  static std::vector<TablePtr> get_sorted_tables(std::vector<TablePtr> tables,
+                                                 const std::vector<TableId>& sorted_table_ids);
 };
 
 std::ostream& operator<<(std::ostream& os, const DependencyGraph& graph);

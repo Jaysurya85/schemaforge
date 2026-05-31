@@ -4,8 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "schemaforge/generator/IntGenerator.h"
 #include "schemaforge/generator/GenerationConfig.h"
+#include "schemaforge/generator/IntGenerator.h"
 #include "schemaforge/generator/RandomEngine.h"
 #include "schemaforge/schema/Table.h"
 
@@ -18,26 +18,35 @@ class KeyRegistry {
     int count;
   };
 
-  std::unordered_map<std::string, IntRangeKeySource> int_range_sources;
+  struct KeyRef {
+    const Table* table;
+    std::vector<const Column*> columns;
 
-  static std::string make_key(const std::string& table_name,
-                              const std::vector<std::string>& columns);
+    bool operator==(const KeyRef& other) const;
+  };
+
+  struct KeyRefHash {
+    std::size_t operator()(const KeyRef& key) const;
+  };
+
+  std::unordered_map<KeyRef, IntRangeKeySource, KeyRefHash> int_range_sources;
+  static KeyRef make_key(const Table* table, const std::vector<Column*>& columns);
 
  public:
   KeyRegistry() = default;
 
-  void register_int_range(const std::string& table_name, const std::vector<std::string>& columns,
-                          int start, int count);
+  void register_int_range(const Table* table, const std::vector<Column*>& columns, int start,
+                          int count);
 
-  [[nodiscard]] std::vector<Data> random_key(const std::string& table_name,
-                                             const std::vector<std::string>& columns,
+  [[nodiscard]] std::vector<Data> random_key(const Table* table,
+                                             const std::vector<Column*>& columns,
                                              RandomEngine& random_engine) const;
 
-  [[nodiscard]] std::vector<Data> key_at_row(const std::string& table_name,
-                                             const std::vector<std::string>& columns,
+  [[nodiscard]] std::vector<Data> key_at_row(const Table* table,
+                                             const std::vector<Column*>& columns,
                                              std::size_t row_index) const;
 
-  static KeyRegistry build_from_tables(const std::vector<Table>& tables,
+  static KeyRegistry build_from_tables(const std::vector<TablePtr>& tables,
                                        const GenerationConfig& config);
 };
 

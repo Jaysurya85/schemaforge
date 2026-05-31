@@ -54,12 +54,12 @@ std::string SqlInsertWriter::format_value(const Column& column, const Data& valu
 std::string SqlInsertWriter::write_row(const TableData& table_data, std::size_t row_index) {
   std::ostringstream output;
 
-  output << "INSERT INTO " << table_data.table_name << " (";
+  output << "INSERT INTO " << table_data.table->get_table_name() << " (";
   for (std::size_t column_index = 0; column_index < table_data.columns.size(); ++column_index) {
     if (column_index > 0) {
       output << ", ";
     }
-    output << table_data.columns[column_index].column.get_column_name();
+    output << table_data.columns[column_index].column->get_column_name();
   }
 
   output << ") VALUES (";
@@ -69,7 +69,7 @@ std::string SqlInsertWriter::write_row(const TableData& table_data, std::size_t 
     }
 
     const auto& column_data = table_data.columns[column_index];
-    output << format_value(column_data.column, column_data.data[row_index]);
+    output << format_value(*column_data.column, column_data.data[row_index]);
   }
   output << ");";
 

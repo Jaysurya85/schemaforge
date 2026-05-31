@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(SQLite3 REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 add_executable(schemaforge
     src/main.cpp
@@ -18,6 +19,7 @@ add_executable(schemaforge
     src/validation/GenerationFeasibilityValidator.cpp
     src/validation/SQLiteValidator.cpp
     src/graph/DependencyGraph.cpp
+    src/generator/GenerationConfig.cpp
     src/generator/GenerationPlan.cpp
     src/generator/KeyRegistry.cpp
     src/generator/ValueGenerator.cpp
@@ -36,4 +38,5 @@ target_include_directories(schemaforge PRIVATE
 target_link_libraries(schemaforge PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/external/sql-parser/libsqlparser.so
     SQLite::SQLite3
+    yaml-cpp::yaml-cpp
 )
