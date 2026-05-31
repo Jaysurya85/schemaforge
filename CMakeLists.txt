@@ -19,7 +19,7 @@ add_executable(schemaforge
     src/validation/GenerationFeasibilityValidator.cpp
     src/validation/SQLiteValidator.cpp
     src/graph/DependencyGraph.cpp
-    src/generator/GenerationConfig.cpp
+    src/config/GenerationConfig.cpp
     src/generator/GenerationPlan.cpp
     src/generator/KeyRegistry.cpp
     src/generator/ValueGenerator.cpp

@@ -1,10 +1,9 @@
 #pragma once
 #include <cstddef>
-#include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "schemaforge/generator/GenerationConfig.h"
+#include "schemaforge/config/GenerationConfig.h"
 #include "schemaforge/generator/IntGenerator.h"
 #include "schemaforge/generator/RandomEngine.h"
 #include "schemaforge/schema/Table.h"

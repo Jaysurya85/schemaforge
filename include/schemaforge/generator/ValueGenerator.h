@@ -1,7 +1,7 @@
 #pragma once
 #include <vector>
 
-#include "schemaforge/generator/GenerationConfig.h"
+#include "schemaforge/config/GenerationConfig.h"
 #include "schemaforge/generator/IntGenerator.h"
 #include "schemaforge/generator/KeyRegistry.h"
 #include "schemaforge/generator/RandomEngine.h"

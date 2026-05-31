@@ -22,19 +22,28 @@ git submodule update --init --recursive
 
 ```bash
 make build
-make run
 ```
 
-Or do everything in one command:
+Create an editable generation config from a schema:
 
 ```bash
-make
+./build/schemaforge init --schema schema.sql --config schemaforge.yaml
 ```
 
-By default, SchemaForge reads `schema.sql`. You can also pass a schema path:
+Generate SQL INSERT statements from the config:
 
 ```bash
-./build/schemaforge tests/valid/basic_fk/schema.sql
+./build/schemaforge generate --config schemaforge.yaml
+```
+
+The generated config stores the schema path, seed, default row count, output file, SQLite
+validation setting, and per-table row counts. Edit `schemaforge.yaml` before running `generate`
+to change table row counts or output settings.
+
+Useful init options:
+
+```bash
+./build/schemaforge init --schema tests/valid/basic_fk/schema.sql --config schemaforge.yaml --seed 42 --default-rows 10
 ```
 
 ## Tests

@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-#include "schemaforge/generator/GenerationConfig.h"
+#include "schemaforge/config/GenerationConfig.h"
 #include "schemaforge/graph/DependencyGraph.h"
 #include "schemaforge/schema/Table.h"
 
