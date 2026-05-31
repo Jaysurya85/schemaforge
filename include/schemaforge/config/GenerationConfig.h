@@ -11,6 +11,7 @@ struct GenerationConfig {
   std::string schema_path{"schema.sql"};
   std::string output_file{"output.sql"};
   std::string output_format{"sql"};
+  std::string benchmark_file{"benchmark.yaml"};
   bool sqlite_validation{true};
   std::unordered_map<std::string, int> table_row_counts;
 

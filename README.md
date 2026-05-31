@@ -36,15 +36,19 @@ Generate SQL INSERT statements from the config:
 ./build/schemaforge generate --config schemaforge.yaml
 ```
 
-The generated config stores the schema path, seed, default row count, output file, SQLite
-validation setting, and per-table row counts. Edit `schemaforge.yaml` before running `generate`
-to change table row counts or output settings.
+The generated config stores the schema path, seed, default row count, output file, benchmark file,
+SQLite validation setting, and per-table row counts. Edit `schemaforge.yaml` before running
+`generate` to change table row counts or output settings.
 
 Useful init options:
 
 ```bash
 ./build/schemaforge init --schema tests/valid/basic_fk/schema.sql --config schemaforge.yaml --seed 42 --default-rows 10
 ```
+
+`generate` writes INSERT statements to `output.sql` and benchmark metrics to `benchmark.yaml`.
+Generation throughput is calculated from generated rows divided by generation time only; SQLite
+validation time is reported separately.
 
 ## Tests
 

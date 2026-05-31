@@ -40,6 +40,7 @@ run_valid() {
   local safe_name="${name//\//_}"
   local config_file="${TMP_DIR}/${safe_name}.yaml"
   local output_file="${TMP_DIR}/${safe_name}.sql"
+  local benchmark_file="${TMP_DIR}/${safe_name}_benchmark.yaml"
   local init_log="${TMP_DIR}/${safe_name}_init.log"
   local generate_log="${TMP_DIR}/${safe_name}_generate.log"
 
@@ -50,6 +51,7 @@ run_valid() {
   fi
 
   perl -0pi -e "s#file: output\\.sql#file: ${output_file}#" "${config_file}"
+  perl -0pi -e "s#file: benchmark\\.yaml#file: ${benchmark_file}#" "${config_file}"
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --rows)
@@ -68,7 +70,11 @@ run_valid() {
 
   if "${BINARY}" generate --config "${config_file}" >"${generate_log}" 2>&1 &&
       grep -q "SQLite Validation Result: Valid" "${generate_log}" &&
-      [[ -s "${output_file}" ]]; then
+      grep -q "sqlite: passed" "${benchmark_file}" &&
+      grep -q "total_rows:" "${benchmark_file}" &&
+      ! grep -q "Generated table data" "${generate_log}" &&
+      [[ -s "${output_file}" ]] &&
+      [[ -s "${benchmark_file}" ]]; then
     record_pass "${name}"
   else
     record_fail "${name}" "${generate_log}"
@@ -83,6 +89,7 @@ run_invalid() {
   local safe_name="${name//\//_}"
   local config_file="${TMP_DIR}/${safe_name}.yaml"
   local output_file="${TMP_DIR}/${safe_name}.sql"
+  local benchmark_file="${TMP_DIR}/${safe_name}_benchmark.yaml"
   local init_log="${TMP_DIR}/${safe_name}_init.log"
   local generate_log="${TMP_DIR}/${safe_name}_generate.log"
 
@@ -97,6 +104,7 @@ run_invalid() {
   fi
 
   perl -0pi -e "s#file: output\\.sql#file: ${output_file}#" "${config_file}"
+  perl -0pi -e "s#file: benchmark\\.yaml#file: ${benchmark_file}#" "${config_file}"
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --rows)
@@ -135,6 +143,8 @@ run_deterministic() {
   local second_log="${TMP_DIR}/${safe_name}_b.log"
   local first_output="${TMP_DIR}/${safe_name}_a.sql"
   local second_output="${TMP_DIR}/${safe_name}_b.sql"
+  local first_benchmark="${TMP_DIR}/${safe_name}_a_benchmark.yaml"
+  local second_benchmark="${TMP_DIR}/${safe_name}_b_benchmark.yaml"
 
   if ! "${BINARY}" init --schema "${ROOT_DIR}/${schema_path}" --config "${config_file}" \
       >"${first_log}" 2>&1; then
@@ -157,12 +167,14 @@ run_deterministic() {
   done
 
   perl -0pi -e "s#file: output\\.sql#file: ${first_output}#" "${config_file}"
+  perl -0pi -e "s#file: benchmark\\.yaml#file: ${first_benchmark}#" "${config_file}"
   if ! "${BINARY}" generate --config "${config_file}" >"${first_log}" 2>&1; then
     record_fail "${name}" "${first_log}"
     return
   fi
 
   perl -0pi -e "s#file: ${first_output}#file: ${second_output}#" "${config_file}"
+  perl -0pi -e "s#file: ${first_benchmark}#file: ${second_benchmark}#" "${config_file}"
   if ! "${BINARY}" generate --config "${config_file}" >"${second_log}" 2>&1; then
     record_fail "${name}" "${second_log}"
     return
@@ -200,6 +212,7 @@ run_sqlite_disabled() {
   local name="valid/sqlite_disabled"
   local config_file="${TMP_DIR}/sqlite_disabled.yaml"
   local output_file="${TMP_DIR}/sqlite_disabled.sql"
+  local benchmark_file="${TMP_DIR}/sqlite_disabled_benchmark.yaml"
   local log_file="${TMP_DIR}/sqlite_disabled.log"
 
   if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
@@ -209,12 +222,15 @@ run_sqlite_disabled() {
   fi
 
   perl -0pi -e "s#file: output\\.sql#file: ${output_file}#" "${config_file}"
+  perl -0pi -e "s#file: benchmark\\.yaml#file: ${benchmark_file}#" "${config_file}"
   perl -0pi -e "s/(sqlite: )true/\${1}false/" "${config_file}"
 
   if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
       grep -q "Wrote SQL INSERT statements" "${log_file}" &&
+      grep -q "sqlite: skipped" "${benchmark_file}" &&
       ! grep -q "SQLite Validation Result" "${log_file}" &&
-      [[ -s "${output_file}" ]]; then
+      [[ -s "${output_file}" ]] &&
+      [[ -s "${benchmark_file}" ]]; then
     record_pass "${name}"
   else
     record_fail "${name}" "${log_file}"

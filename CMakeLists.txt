@@ -11,6 +11,7 @@ find_package(yaml-cpp REQUIRED)
 
 add_executable(schemaforge
     src/main.cpp
+    src/benchmark/BenchmarkEngine.cpp
     src/parser/ParserAdapter.cpp
     src/schema/Table.cpp
     src/schema/Column.cpp
@@ -37,6 +38,6 @@ target_include_directories(schemaforge PRIVATE
 
 target_link_libraries(schemaforge PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/external/sql-parser/libsqlparser.so
-    SQLite::SQLite3
+    SQLite3::SQLite3
     yaml-cpp::yaml-cpp
 )

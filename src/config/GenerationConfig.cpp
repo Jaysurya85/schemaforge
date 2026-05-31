@@ -15,6 +15,7 @@ GenerationConfig GenerationConfig::make_default() {
   generation_config.schema_path = "schema.sql";
   generation_config.output_file = "output.sql";
   generation_config.output_format = "sql";
+  generation_config.benchmark_file = "benchmark.yaml";
   generation_config.sqlite_validation = true;
   generation_config.table_row_counts = {};
   return generation_config;
@@ -154,6 +155,11 @@ void GenerationConfig::write_context_file(const std::vector<std::string>& table_
   yaml << YAML::Key << "sqlite" << YAML::Value << sqlite_validation;
   yaml << YAML::EndMap;
 
+  yaml << YAML::Key << "benchmark";
+  yaml << YAML::Value << YAML::BeginMap;
+  yaml << YAML::Key << "file" << YAML::Value << benchmark_file;
+  yaml << YAML::EndMap;
+
   yaml << YAML::Key << "tables";
   yaml << YAML::Value << YAML::BeginMap;
   for (const auto& table_id : table_order) {
@@ -211,6 +217,10 @@ bool GenerationConfig::read_context_file(const std::string& path) {
 
     if (config["validation"] && config["validation"]["sqlite"]) {
       sqlite_validation = config["validation"]["sqlite"].as<bool>();
+    }
+
+    if (config["benchmark"] && config["benchmark"]["file"]) {
+      benchmark_file = config["benchmark"]["file"].as<std::string>();
     }
 
     table_row_counts.clear();
