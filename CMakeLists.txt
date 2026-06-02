@@ -15,10 +15,10 @@ add_executable(schemaforge
     src/parser/ParserAdapter.cpp
     src/schema/Table.cpp
     src/schema/Column.cpp
-    src/validation/SchemaValidator.cpp
     src/validation/CapacityAnalyzer.cpp
-    src/validation/GenerationFeasibilityValidator.cpp
     src/validation/SQLiteValidator.cpp
+    src/validation/ValidationResult.cpp
+    src/validation/ValidationRunner.cpp
     src/graph/DependencyGraph.cpp
     src/config/GenerationConfig.cpp
     src/generator/GenerationPlan.cpp

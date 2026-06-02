@@ -3,6 +3,19 @@
 SchemaForge parses a SQL schema, validates table relationships, generates deterministic sample
 data, writes SQL `INSERT` statements, and validates the result in SQLite.
 
+## v1 Features
+
+- Parses SQL `CREATE TABLE` schemas and orders tables by foreign-key dependencies.
+- Generates deterministic SQL `INSERT` data with seed and row-count configuration.
+- Writes an editable YAML config for schema path, output path, benchmark path, SQLite validation,
+  default rows, and per-table rows.
+- Validates schema, config, and generation feasibility with aggregated errors instead of stopping
+  at the first issue.
+- Checks duplicate names, PK/UNIQUE/FK correctness, cycles, self-references, unsupported types,
+  missing schema/config targets, and row-capacity limits.
+- Optionally validates generated SQL in SQLite and writes benchmark metrics.
+- Includes a complex marketplace test fixture for multi-table generation.
+
 ## Clone
 
 Using SSH:
@@ -27,7 +40,7 @@ make build
 Create an editable generation config from a schema:
 
 ```bash
-./build/schemaforge init --schema schema.sql --config schemaforge.yaml
+./build/schemaforge init --schema tests/valid/basic_fk/schema.sql --config schemaforge.yaml
 ```
 
 Generate SQL INSERT statements from the config:
@@ -55,3 +68,5 @@ validation time is reported separately.
 ```bash
 scripts/run_integration_tests.sh
 ```
+
+Valid test outputs and benchmark reports are written to `tests/artifacts/`.

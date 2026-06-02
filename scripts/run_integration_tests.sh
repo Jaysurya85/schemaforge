@@ -4,6 +4,7 @@ set -u
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="${ROOT_DIR}/build/schemaforge"
 TMP_DIR="$(mktemp -d)"
+ARTIFACT_DIR="${ROOT_DIR}/tests/artifacts"
 PASSED=0
 FAILED=0
 
@@ -15,6 +16,11 @@ trap cleanup EXIT
 build_project() {
   cmake -S "${ROOT_DIR}" -B "${ROOT_DIR}/build" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
   cmake --build "${ROOT_DIR}/build"
+}
+
+prepare_artifacts() {
+  rm -rf "${ARTIFACT_DIR}"
+  mkdir -p "${ARTIFACT_DIR}"
 }
 
 record_pass() {
@@ -39,8 +45,8 @@ run_valid() {
   shift 2
   local safe_name="${name//\//_}"
   local config_file="${TMP_DIR}/${safe_name}.yaml"
-  local output_file="${TMP_DIR}/${safe_name}.sql"
-  local benchmark_file="${TMP_DIR}/${safe_name}_benchmark.yaml"
+  local output_file="${ARTIFACT_DIR}/${safe_name}.sql"
+  local benchmark_file="${ARTIFACT_DIR}/${safe_name}_benchmark.yaml"
   local init_log="${TMP_DIR}/${safe_name}_init.log"
   local generate_log="${TMP_DIR}/${safe_name}_generate.log"
 
@@ -133,6 +139,109 @@ run_invalid() {
   fi
 }
 
+run_invalid_contains_all() {
+  local name="$1"
+  local schema_path="$2"
+  shift 2
+  local safe_name="${name//\//_}"
+  local config_file="${TMP_DIR}/${safe_name}.yaml"
+  local log_file="${TMP_DIR}/${safe_name}.log"
+
+  if "${BINARY}" init --schema "${ROOT_DIR}/${schema_path}" --config "${config_file}" \
+      >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  for expected_text in "$@"; do
+    if ! grep -q "${expected_text}" "${log_file}"; then
+      record_fail "${name}" "${log_file}"
+      return
+    fi
+  done
+
+  record_pass "${name}"
+}
+
+run_config_unknown_table() {
+  local name="invalid/config_unknown_table"
+  local config_file="${TMP_DIR}/config_unknown_table.yaml"
+  local output_file="${TMP_DIR}/config_unknown_table.sql"
+  local benchmark_file="${TMP_DIR}/config_unknown_table_benchmark.yaml"
+  local log_file="${TMP_DIR}/config_unknown_table.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  perl -0pi -e "s#file: output\\.sql#file: ${output_file}#" "${config_file}"
+  perl -0pi -e "s#file: benchmark\\.yaml#file: ${benchmark_file}#" "${config_file}"
+  printf "  ghost_table:\n    rows: 1\n" >>"${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if grep -q "Config contains unknown table 'ghost_table'" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_missing_schema_path() {
+  local name="invalid/missing_schema_path"
+  local config_file="${TMP_DIR}/missing_schema_path.yaml"
+  local log_file="${TMP_DIR}/missing_schema_path.log"
+
+  cat >"${config_file}" <<EOF
+schema: ""
+generation:
+  seed: 42
+  default_rows: 10
+tables: {}
+EOF
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if grep -q "Missing schema path" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_missing_schema_file() {
+  local name="invalid/missing_schema_file"
+  local config_file="${TMP_DIR}/missing_schema_file.yaml"
+  local log_file="${TMP_DIR}/missing_schema_file.log"
+
+  cat >"${config_file}" <<EOF
+schema: ${TMP_DIR}/does_not_exist.sql
+generation:
+  seed: 42
+  default_rows: 10
+tables: {}
+EOF
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if grep -q "Missing schema file" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 run_deterministic() {
   local name="$1"
   local schema_path="$2"
@@ -141,10 +250,10 @@ run_deterministic() {
   local config_file="${TMP_DIR}/${safe_name}.yaml"
   local first_log="${TMP_DIR}/${safe_name}_a.log"
   local second_log="${TMP_DIR}/${safe_name}_b.log"
-  local first_output="${TMP_DIR}/${safe_name}_a.sql"
-  local second_output="${TMP_DIR}/${safe_name}_b.sql"
-  local first_benchmark="${TMP_DIR}/${safe_name}_a_benchmark.yaml"
-  local second_benchmark="${TMP_DIR}/${safe_name}_b_benchmark.yaml"
+  local first_output="${ARTIFACT_DIR}/${safe_name}_a.sql"
+  local second_output="${ARTIFACT_DIR}/${safe_name}_b.sql"
+  local first_benchmark="${ARTIFACT_DIR}/${safe_name}_a_benchmark.yaml"
+  local second_benchmark="${ARTIFACT_DIR}/${safe_name}_b_benchmark.yaml"
 
   if ! "${BINARY}" init --schema "${ROOT_DIR}/${schema_path}" --config "${config_file}" \
       >"${first_log}" 2>&1; then
@@ -211,8 +320,8 @@ run_usage_invalid() {
 run_sqlite_disabled() {
   local name="valid/sqlite_disabled"
   local config_file="${TMP_DIR}/sqlite_disabled.yaml"
-  local output_file="${TMP_DIR}/sqlite_disabled.sql"
-  local benchmark_file="${TMP_DIR}/sqlite_disabled_benchmark.yaml"
+  local output_file="${ARTIFACT_DIR}/valid_sqlite_disabled.sql"
+  local benchmark_file="${ARTIFACT_DIR}/valid_sqlite_disabled_benchmark.yaml"
   local log_file="${TMP_DIR}/sqlite_disabled.log"
 
   if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
@@ -239,6 +348,7 @@ run_sqlite_disabled() {
 
 cd "${ROOT_DIR}" || exit 1
 build_project
+prepare_artifacts
 
 run_usage_invalid
 run_valid "valid/basic_fk" "tests/valid/basic_fk/schema.sql"
@@ -248,16 +358,32 @@ run_valid "valid/unique_text" "tests/valid/unique_text/schema.sql"
 run_valid "valid/unique_fk_within_parent_capacity" "tests/valid/unique_fk_within_parent_capacity/schema.sql"
 run_valid "valid/unique_boolean_within_capacity" "tests/valid/unique_boolean_within_capacity/schema.sql" --rows flags=2
 run_valid "valid/dependency_chain" "tests/valid/dependency_chain/schema.sql"
+run_valid "valid/complex_marketplace" "tests/valid/complex_marketplace/schema.sql"
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
 run_sqlite_disabled
 
 run_invalid "invalid/missing_fk_table" "tests/invalid/missing_fk_table/schema.sql" "Referenced table 'users' not found"
 run_invalid "invalid/missing_fk_column" "tests/invalid/missing_fk_column/schema.sql" "Referenced column 'user_id' not found"
-run_invalid "invalid/fk_type_mismatch" "tests/invalid/fk_type_mismatch/schema.sql" "Referenced foreign key column 'users.id' must use INT or BIGINT"
+run_invalid "invalid/duplicate_table_names" "tests/invalid/duplicate_table_names/schema.sql" "Duplicate table name 'users'"
+run_invalid "invalid/duplicate_column_names" "tests/invalid/duplicate_column_names/schema.sql" "Duplicate column name 'users.id'"
+run_invalid "invalid/missing_pk_column" "tests/invalid/missing_pk_column/schema.sql" "Primary key on table 'users' references an unknown column"
+run_invalid "invalid/missing_unique_column" "tests/invalid/missing_unique_column/schema.sql" "Unique constraint on table 'users' references an unknown column"
+run_invalid "invalid/missing_fk_local_column" "tests/invalid/missing_fk_local_column/schema.sql" "unknown local column 'user_id'"
+run_invalid "invalid/fk_column_count_mismatch" "tests/invalid/fk_column_count_mismatch/schema.sql" "has 2 local columns but 1 referenced columns"
+run_invalid "invalid/fk_type_mismatch" "tests/invalid/fk_type_mismatch/schema.sql" "type does not match"
+run_invalid "invalid/fk_references_non_unique" "tests/invalid/fk_references_non_unique/schema.sql" "must reference a PRIMARY KEY or UNIQUE constraint"
+run_invalid "invalid/cycle" "tests/invalid/cycle/schema.sql" "Cycle detected"
+run_invalid "invalid/self_reference" "tests/invalid/self_reference/schema.sql" "Self-referencing foreign key"
+run_invalid "invalid/unsupported_pk_generation_type" "tests/invalid/unsupported_pk_generation_type/schema.sql" "Primary key column 'users.id' must use INT or BIGINT for generation"
+run_invalid "invalid/unsupported_fk_generation_type" "tests/invalid/unsupported_fk_generation_type/schema.sql" "Foreign key column 'orders.user_id' must use INT or BIGINT for generation"
 run_invalid "invalid/unsupported_date" "tests/invalid/unsupported_date/schema.sql" "unsupported generation type"
 run_invalid "invalid/unique_boolean_too_many" "tests/invalid/unique_boolean_too_many/schema.sql" "UNIQUE BOOLEAN"
 run_invalid "invalid/unique_fk_too_many_children" "tests/invalid/unique_fk_too_many_children/schema.sql" "UNIQUE foreign key" --rows orders=25
 run_invalid "invalid/zero_parent_rows_for_fk" "tests/invalid/zero_parent_rows_for_fk/schema.sql" "references table 'users', but that table has 0 rows" --rows users=0 --rows orders=5
+run_invalid_contains_all "invalid/multiple_errors" "tests/invalid/multiple_errors/schema.sql" "Duplicate column name 'users.id'" "unsupported generation type"
+run_config_unknown_table
+run_missing_schema_path
+run_missing_schema_file
 
 echo
 echo "Passed: ${PASSED}"

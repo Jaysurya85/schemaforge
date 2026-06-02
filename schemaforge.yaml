@@ -1,4 +1,4 @@
-schema: schema.sql
+schema: tests/valid/basic_fk/schema.sql
 generation:
   seed: 42
   default_rows: 10

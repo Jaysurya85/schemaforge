@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-#include "schemaforge/validation/SchemaValidator.h"
+#include "schemaforge/validation/ValidationResult.h"
 
 namespace schemaforge {
 

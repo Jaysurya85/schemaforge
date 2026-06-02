@@ -14,9 +14,7 @@
 #include "schemaforge/parser/ParserAdapter.h"
 #include "schemaforge/schema/Table.h"
 #include "schemaforge/validation/CapacityAnalyzer.h"
-#include "schemaforge/validation/GenerationFeasibilityValidator.h"
-#include "schemaforge/validation/SQLiteValidator.h"
-#include "schemaforge/validation/SchemaValidator.h"
+#include "schemaforge/validation/ValidationRunner.h"
 
 namespace {
 
@@ -39,6 +37,13 @@ void print_usage() {
 }
 
 SchemaAnalysis analyze_schema(const std::string& schema_path, bool verbose) {
+  schemaforge::ValidationResult schema_file_validation =
+      schemaforge::ValidationRunner::validate_schema_file(schema_path);
+  if (!schema_file_validation.is_valid) {
+    std::cout << schema_file_validation << "\n";
+    return {.sql = {}, .sorted_tables = {}, .table_order = {}};
+  }
+
   std::string sql = schemaforge::FileReader::read_file(schema_path);
 
   std::cout << "Welcome to Schemaforge" << '\n';
@@ -48,7 +53,8 @@ SchemaAnalysis analyze_schema(const std::string& schema_path, bool verbose) {
   }
 
   std::vector<schemaforge::TablePtr> tables = schemaforge::ParserAdapter::parse(sql);
-  schemaforge::ValidationResult validation_result = schemaforge::SchemaValidator::validate(tables);
+  schemaforge::ValidationResult validation_result =
+      schemaforge::ValidationRunner::validate_schema(tables);
 
   std::cout << validation_result << "\n";
   if (!validation_result.is_valid) {
@@ -152,12 +158,19 @@ int run_generate(int argc, char* argv[]) {
     return 1;
   }
 
+  schemaforge::ValidationResult config_validation_result =
+      schemaforge::ValidationRunner::validate_config(analysis.sorted_tables, generation_config);
+  std::cout << "Config " << config_validation_result << "\n";
+  if (!config_validation_result.is_valid) {
+    return 1;
+  }
+
   schemaforge::SchemaCapacityInfo capacity_info =
       schemaforge::CapacityAnalyzer::analyze(analysis.sorted_tables, generation_config);
 
-  schemaforge::GenerationFeasibilityValidator validator(capacity_info);
   schemaforge::ValidationResult generation_validation_result =
-      validator.validate(analysis.sorted_tables, generation_config, capacity_info);
+      schemaforge::ValidationRunner::validate_generation(analysis.sorted_tables, generation_config,
+                                                         capacity_info);
 
   std::cout << "Generation " << generation_validation_result << "\n";
   if (!generation_validation_result.is_valid) {
@@ -183,10 +196,9 @@ int run_generate(int argc, char* argv[]) {
   if (generation_config.sqlite_validation) {
     const auto validation_start = std::chrono::steady_clock::now();
     schemaforge::ValidationResult sqlite_validation_result =
-        schemaforge::SQLiteValidator::validate(analysis.sql, insert_statements);
+        schemaforge::ValidationRunner::validate_sqlite(analysis.sql, insert_statements);
     const auto validation_end = std::chrono::steady_clock::now();
-    benchmark_report.validation_time_seconds =
-        elapsed_seconds(validation_start, validation_end);
+    benchmark_report.validation_time_seconds = elapsed_seconds(validation_start, validation_end);
     benchmark_report.sqlite_validation_status = sqlite_validation_result.is_valid
                                                     ? schemaforge::SQLiteValidationStatus::Passed
                                                     : schemaforge::SQLiteValidationStatus::Failed;
