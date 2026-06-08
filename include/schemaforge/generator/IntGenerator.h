@@ -1,9 +1,9 @@
 #pragma once
-#include <string>
 #include <vector>
 
+#include "schemaforge/generator/GeneratedValue.h"
+
 namespace schemaforge {
-using Data = std::string;
 
 class IntGenerator {
  private:
@@ -14,6 +14,6 @@ class IntGenerator {
   IntGenerator() : max(-1), min(0) {};
   IntGenerator(int min) : max(-1), min(min) {};
   IntGenerator(int min, int max) : max(max), min(min) {};
-  std::vector<Data> generate(int size);
+  std::vector<GeneratedValue> generate(int size);
 };
 }  // namespace schemaforge

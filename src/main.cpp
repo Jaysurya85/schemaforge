@@ -180,7 +180,9 @@ int run_generate(int argc, char* argv[]) {
   const auto generation_start = std::chrono::steady_clock::now();
   std::vector<schemaforge::TableData> table_data =
       schemaforge::GenerationPlan::generate_table_data(analysis.sorted_tables, generation_config);
+
   const auto generation_end = std::chrono::steady_clock::now();
+
   benchmark_report.generation_time_seconds = elapsed_seconds(generation_start, generation_end);
   schemaforge::BenchmarkEngine::record_generated_rows(benchmark_report, table_data);
 

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "schemaforge/config/GenerationConfig.h"
+#include "schemaforge/generator/GeneratedValue.h"
 #include "schemaforge/generator/IntGenerator.h"
 #include "schemaforge/generator/KeyRegistry.h"
 #include "schemaforge/generator/RandomEngine.h"
@@ -15,7 +16,7 @@
 namespace schemaforge {
 struct ColumnData {
   const Column* column;
-  std::vector<Data> data;
+  std::vector<GeneratedValue> data;
 };
 
 struct TableData {

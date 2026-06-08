@@ -1,9 +1,6 @@
 #include "schemaforge/generator/ValueGenerator.h"
 
 #include <algorithm>
-#include <iomanip>
-#include <optional>
-#include <sstream>
 #include <stdexcept>
 
 #include "schemaforge/generator/BooleanGenerator.h"
@@ -49,36 +46,36 @@ bool is_decimal_type(DataType data_type) {
          data_type == DataType::DOUBLE || data_type == DataType::REAL;
 }
 
-std::vector<Data> generate_random_int_data(int num_rows, RandomEngine& random_engine) {
-  std::vector<Data> data;
+std::vector<GeneratedValue> generate_random_int_data(int num_rows, RandomEngine& random_engine) {
+  std::vector<GeneratedValue> data;
   data.reserve(num_rows);
 
   for (int row = 0; row < num_rows; ++row) {
-    data.push_back(std::to_string(random_engine.next_int(1, 1000)));
+    data.push_back(GeneratedValue::integer(random_engine.next_int(1, 1000)));
   }
 
   return data;
 }
 
-std::vector<Data> generate_random_decimal_data(int num_rows, RandomEngine& random_engine) {
-  std::vector<Data> data;
+std::vector<GeneratedValue> generate_random_decimal_data(int num_rows,
+                                                         RandomEngine& random_engine) {
+  std::vector<GeneratedValue> data;
   data.reserve(num_rows);
 
   for (int row = 0; row < num_rows; ++row) {
-    std::ostringstream output;
-    output << std::fixed << std::setprecision(2) << random_engine.next_decimal(1.0, 1000.0);
-    data.push_back(output.str());
+    data.push_back(GeneratedValue::numeric(random_engine.next_decimal(1.0, 1000.0)));
   }
 
   return data;
 }
 
-std::vector<Data> generate_random_boolean_data(int num_rows, RandomEngine& random_engine) {
-  std::vector<Data> data;
+std::vector<GeneratedValue> generate_random_boolean_data(int num_rows,
+                                                         RandomEngine& random_engine) {
+  std::vector<GeneratedValue> data;
   data.reserve(num_rows);
 
   for (int row = 0; row < num_rows; ++row) {
-    data.emplace_back(random_engine.next_bool() ? "true" : "false");
+    data.push_back(GeneratedValue::boolean(random_engine.next_bool()));
   }
 
   return data;
@@ -86,11 +83,9 @@ std::vector<Data> generate_random_boolean_data(int num_rows, RandomEngine& rando
 
 }  // namespace
 
-std::vector<Data> ValueGenerator::generate_column_data(const Column& column, const Table& table,
-                                                       int num_rows,
-                                                       const GenerationConfig& config,
-                                                       RandomEngine& random_engine,
-                                                       const KeyRegistry& key_registry) {
+std::vector<GeneratedValue> ValueGenerator::generate_column_data(
+    const Column& column, const Table& table, int num_rows, const GenerationConfig& config,
+    RandomEngine& random_engine, const KeyRegistry& key_registry) {
   const auto column_data_type = column.get_column_type().data_type;
   const bool has_unique_constraint = has_constraint(table, column, ConstraintType::Unique);
   const bool has_primary_key_constraint = has_constraint(table, column, ConstraintType::PrimaryKey);
@@ -118,7 +113,7 @@ std::vector<Data> ValueGenerator::generate_column_data(const Column& column, con
     }
 
     if (has_unique_constraint) {
-      std::vector<Data> data;
+      std::vector<GeneratedValue> data;
       data.reserve(num_rows);
       for (int row = 0; row < num_rows; ++row) {
         data.push_back(key_registry.key_at_row(foreign_key->referenced_table,
@@ -129,7 +124,7 @@ std::vector<Data> ValueGenerator::generate_column_data(const Column& column, con
       return data;
     }
 
-    std::vector<Data> data;
+    std::vector<GeneratedValue> data;
     data.reserve(num_rows);
     for (int row = 0; row < num_rows; ++row) {
       data.push_back(key_registry

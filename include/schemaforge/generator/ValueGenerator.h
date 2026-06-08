@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "schemaforge/config/GenerationConfig.h"
+#include "schemaforge/generator/GeneratedValue.h"
 #include "schemaforge/generator/IntGenerator.h"
 #include "schemaforge/generator/KeyRegistry.h"
 #include "schemaforge/generator/RandomEngine.h"
@@ -14,10 +15,9 @@ class ValueGenerator {
  public:
   ValueGenerator() = default;
 
-  static std::vector<Data> generate_column_data(const Column& column, const Table& table,
-                                                int num_rows, const GenerationConfig& config,
-                                                RandomEngine& random_engine,
-                                                const KeyRegistry& key_registry);
+  static std::vector<GeneratedValue> generate_column_data(
+      const Column& column, const Table& table, int num_rows, const GenerationConfig& config,
+      RandomEngine& random_engine, const KeyRegistry& key_registry);
 };
 
 }  // namespace schemaforge

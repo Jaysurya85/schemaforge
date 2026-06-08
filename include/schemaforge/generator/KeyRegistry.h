@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "schemaforge/config/GenerationConfig.h"
+#include "schemaforge/generator/GeneratedValue.h"
 #include "schemaforge/generator/IntGenerator.h"
 #include "schemaforge/generator/RandomEngine.h"
 #include "schemaforge/schema/Table.h"
@@ -37,13 +38,13 @@ class KeyRegistry {
   void register_int_range(const Table* table, const std::vector<Column*>& columns, int start,
                           int count);
 
-  [[nodiscard]] std::vector<Data> random_key(const Table* table,
-                                             const std::vector<Column*>& columns,
-                                             RandomEngine& random_engine) const;
+  [[nodiscard]] std::vector<GeneratedValue> random_key(const Table* table,
+                                                       const std::vector<Column*>& columns,
+                                                       RandomEngine& random_engine) const;
 
-  [[nodiscard]] std::vector<Data> key_at_row(const Table* table,
-                                             const std::vector<Column*>& columns,
-                                             std::size_t row_index) const;
+  [[nodiscard]] std::vector<GeneratedValue> key_at_row(const Table* table,
+                                                       const std::vector<Column*>& columns,
+                                                       std::size_t row_index) const;
 
   static KeyRegistry build_from_tables(const std::vector<TablePtr>& tables,
                                        const GenerationConfig& config);

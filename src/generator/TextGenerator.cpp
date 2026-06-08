@@ -30,15 +30,16 @@ TextGenerator::TextGenerator() : column_name("text") {}
 TextGenerator::TextGenerator(std::string column_name)
     : column_name(normalize_column_name(std::move(column_name))) {}
 
-std::vector<Data> TextGenerator::generate(int size) {
-  std::vector<Data> result;
+std::vector<GeneratedValue> TextGenerator::generate(int size) {
+  std::vector<GeneratedValue> result;
   result.reserve(size);
   for (int row = 1; row <= size; ++row) {
     if (is_email_column(column_name)) {
-      result.push_back(column_name + "_" + std::to_string(row) + "@example.com");
+      result.push_back(GeneratedValue::text(column_name + "_" + std::to_string(row) +
+                                            "@example.com"));
       continue;
     }
-    result.push_back(column_name + "_" + std::to_string(row));
+    result.push_back(GeneratedValue::text(column_name + "_" + std::to_string(row)));
   }
   return result;
 };

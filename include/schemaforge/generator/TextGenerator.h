@@ -2,8 +2,9 @@
 #include <string>
 #include <vector>
 
+#include "schemaforge/generator/GeneratedValue.h"
+
 namespace schemaforge {
-using Data = std::string;
 
 class TextGenerator {
  private:
@@ -12,6 +13,6 @@ class TextGenerator {
  public:
   TextGenerator();
   explicit TextGenerator(std::string column_name);
-  std::vector<Data> generate(int size);
+  std::vector<GeneratedValue> generate(int size);
 };
 }  // namespace schemaforge

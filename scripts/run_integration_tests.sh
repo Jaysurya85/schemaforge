@@ -346,6 +346,84 @@ run_sqlite_disabled() {
   fi
 }
 
+run_sql_literal_formatting() {
+  local name="unit/sql_literal_formatting"
+  local source_file="${TMP_DIR}/sql_literal_formatting.cpp"
+  local binary_file="${TMP_DIR}/sql_literal_formatting"
+  local log_file="${TMP_DIR}/sql_literal_formatting.log"
+
+  cat >"${source_file}" <<'EOF'
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "schemaforge/generator/GeneratedValue.h"
+#include "schemaforge/output/SqlInsertWriter.h"
+#include "schemaforge/schema/Column.h"
+#include "schemaforge/schema/Table.h"
+
+int main() {
+  using namespace schemaforge;
+
+  std::vector<ColumnPtr> columns;
+  columns.push_back(std::make_unique<Column>("id", ColumnType{.data_type = DataType::INT}));
+  columns.push_back(
+      std::make_unique<Column>("amount", ColumnType{.data_type = DataType::DECIMAL}));
+  columns.push_back(std::make_unique<Column>("name", ColumnType{.data_type = DataType::TEXT}));
+  columns.push_back(
+      std::make_unique<Column>("active", ColumnType{.data_type = DataType::BOOLEAN}));
+
+  const Column* id = columns[0].get();
+  const Column* amount = columns[1].get();
+  const Column* name = columns[2].get();
+  const Column* active = columns[3].get();
+  Table table("samples", std::move(columns), {}, {}, {});
+
+  TableData table_data{
+      .table = &table,
+      .columns = {
+          ColumnData{.column = id, .data = {GeneratedValue::integer(7)}},
+          ColumnData{.column = amount, .data = {GeneratedValue::numeric(12.5)}},
+          ColumnData{.column = name, .data = {GeneratedValue::text("owner's sample")}},
+          ColumnData{.column = active, .data = {GeneratedValue::boolean(true)}},
+      },
+  };
+
+  const auto inserts = SqlInsertWriter::write_inserts({table_data});
+  const std::string expected =
+      "INSERT INTO samples (id, amount, name, active) VALUES (7, 12.50, "
+      "'owner''s sample', true);";
+
+  if (inserts.size() != 1 || inserts.front() != expected) {
+    std::cerr << "Expected: " << expected << '\n';
+    if (!inserts.empty()) {
+      std::cerr << "Actual:   " << inserts.front() << '\n';
+    }
+    return 1;
+  }
+
+  return 0;
+}
+EOF
+
+  if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
+      "${source_file}" \
+      "${ROOT_DIR}/src/output/SqlInsertWriter.cpp" \
+      "${ROOT_DIR}/src/schema/Column.cpp" \
+      "${ROOT_DIR}/src/schema/Table.cpp" \
+      -o "${binary_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if "${binary_file}" >"${log_file}" 2>&1; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 cd "${ROOT_DIR}" || exit 1
 build_project
 prepare_artifacts
@@ -361,6 +439,7 @@ run_valid "valid/dependency_chain" "tests/valid/dependency_chain/schema.sql"
 run_valid "valid/complex_marketplace" "tests/valid/complex_marketplace/schema.sql"
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
 run_sqlite_disabled
+run_sql_literal_formatting
 
 run_invalid "invalid/missing_fk_table" "tests/invalid/missing_fk_table/schema.sql" "Referenced table 'users' not found"
 run_invalid "invalid/missing_fk_column" "tests/invalid/missing_fk_column/schema.sql" "Referenced column 'user_id' not found"

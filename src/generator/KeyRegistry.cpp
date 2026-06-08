@@ -60,8 +60,9 @@ void KeyRegistry::register_int_range(const Table* table, const std::vector<Colum
   int_range_sources[make_key(table, columns)] = IntRangeKeySource{.start = start, .count = count};
 }
 
-std::vector<Data> KeyRegistry::random_key(const Table* table, const std::vector<Column*>& columns,
-                                          RandomEngine& random_engine) const {
+std::vector<GeneratedValue> KeyRegistry::random_key(const Table* table,
+                                                    const std::vector<Column*>& columns,
+                                                    RandomEngine& random_engine) const {
   const auto key_source = int_range_sources.find(make_key(table, columns));
   if (key_source == int_range_sources.end()) {
     throw std::runtime_error("No key source registered for referenced key '" + key_name(table) +
@@ -74,11 +75,12 @@ std::vector<Data> KeyRegistry::random_key(const Table* table, const std::vector<
   }
 
   const int offset = random_engine.next_int(0, key_source->second.count - 1);
-  return {std::to_string(key_source->second.start + offset)};
+  return {GeneratedValue::integer(key_source->second.start + offset)};
 }
 
-std::vector<Data> KeyRegistry::key_at_row(const Table* table, const std::vector<Column*>& columns,
-                                          std::size_t row_index) const {
+std::vector<GeneratedValue> KeyRegistry::key_at_row(const Table* table,
+                                                    const std::vector<Column*>& columns,
+                                                    std::size_t row_index) const {
   const auto key_source = int_range_sources.find(make_key(table, columns));
   if (key_source == int_range_sources.end()) {
     throw std::runtime_error("No key source registered for referenced key '" + key_name(table) +
@@ -90,7 +92,7 @@ std::vector<Data> KeyRegistry::key_at_row(const Table* table, const std::vector<
                              "' does not have enough values");
   }
 
-  return {std::to_string(key_source->second.start + static_cast<int>(row_index))};
+  return {GeneratedValue::integer(key_source->second.start + static_cast<int>(row_index))};
 }
 
 KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
