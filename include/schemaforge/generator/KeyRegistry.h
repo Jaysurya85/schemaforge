@@ -35,7 +35,11 @@ class KeyRegistry {
     int count;
   };
 
-  using KeySource = std::variant<IntRangeKeySource, PatternKeySource>;
+  struct AllowedValuesKeySource {
+    std::vector<GeneratedValue> values;
+  };
+
+  using KeySource = std::variant<IntRangeKeySource, PatternKeySource, AllowedValuesKeySource>;
 
   struct KeyRef {
     const Table* table;

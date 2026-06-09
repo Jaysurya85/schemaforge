@@ -535,6 +535,21 @@ void check_unsupported_generation_type(const std::vector<TablePtr>& tables,
   }
 }
 
+void check_unsupported_check_constraints(const std::vector<TablePtr>& tables,
+                                         ValidationResult& validation_result) {
+  for (const auto& table_ptr : tables) {
+    for (const auto& check : table_ptr->get_check_constraints()) {
+      if (check.type == CheckConstraintType::Unsupported || check.column == nullptr) {
+        const std::string column_name =
+            check.column_name.empty() ? "<unknown>" : check.column_name;
+        validation_result.errors.push_back("Unsupported CHECK constraint on " +
+                                           table_ptr->get_table_name() + "." + column_name +
+                                           ": " + check.raw_sql);
+      }
+    }
+  }
+}
+
 void check_composite_primary_key_unsupported(const std::vector<TablePtr>& tables,
                                              ValidationResult& validation_result) {
   for (const auto& table_ptr : tables) {
@@ -680,6 +695,51 @@ void check_char_capacity(const std::vector<TablePtr>&, const GenerationConfig&,
   }
 }
 
+void check_unique_check_capacity(const std::vector<TablePtr>&, const GenerationConfig&,
+                                 const SchemaCapacityInfo& capacity_info,
+                                 ValidationResult& validation_result) {
+  for (const auto& table_info : capacity_info.tables) {
+    if (table_info.requested_rows <= table_info.max_rows) {
+      continue;
+    }
+
+    const auto reason_it = std::ranges::find_if(table_info.reasons, [](const std::string& reason) {
+      return reason.find("UNIQUE CHECK") != std::string::npos;
+    });
+    if (reason_it == table_info.reasons.end()) {
+      continue;
+    }
+
+    const std::string column_name = limited_column_from_reason(*reason_it);
+    validation_result.errors.push_back("Cannot generate " +
+                                       std::to_string(table_info.requested_rows) + " rows for " +
+                                       (column_name.empty() ? table_info.table_id : column_name) +
+                                       ". " + *reason_it);
+  }
+}
+
+void check_composite_unique_capacity(const std::vector<TablePtr>&, const GenerationConfig&,
+                                     const SchemaCapacityInfo& capacity_info,
+                                     ValidationResult& validation_result) {
+  for (const auto& table_info : capacity_info.tables) {
+    if (table_info.requested_rows <= table_info.max_rows) {
+      continue;
+    }
+
+    const auto reason_it = std::ranges::find_if(table_info.reasons, [](const std::string& reason) {
+      return reason.find("Composite UNIQUE(") != std::string::npos;
+    });
+    if (reason_it == table_info.reasons.end()) {
+      continue;
+    }
+
+    validation_result.errors.push_back("Cannot generate " +
+                                       std::to_string(table_info.requested_rows) +
+                                       " rows for table '" + table_info.table_id + "': " +
+                                       *reason_it);
+  }
+}
+
 void check_unique_fk_capacity(const std::vector<TablePtr>& tables, const GenerationConfig& config,
                               const SchemaCapacityInfo&, ValidationResult& validation_result) {
   for (const auto& table_ptr : tables) {
@@ -761,6 +821,7 @@ ValidationResult ValidationRunner::validate_schema(const std::vector<TablePtr>& 
       check_cycle_detection,
       check_self_reference_unsupported,
       check_unsupported_generation_type,
+      check_unsupported_check_constraints,
       check_composite_primary_key_unsupported,
       check_unsupported_pk_fk_generation_type,
   };
@@ -794,6 +855,8 @@ ValidationResult ValidationRunner::validate_generation(const std::vector<TablePt
       check_parent_rows_for_fk,
       check_unique_boolean_capacity,
       check_char_capacity,
+      check_unique_check_capacity,
+      check_composite_unique_capacity,
       check_unique_fk_capacity,
   };
 

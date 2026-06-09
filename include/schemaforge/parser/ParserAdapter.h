@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "schemaforge/schema/Column.h"
@@ -55,7 +56,9 @@ class ParserAdapter {
 
   static std::vector<ColumnPtr> convert_columns(const hsql::CreateStatement* create_stmt);
 
-  static Table convert_create_statement(const hsql::CreateStatement* create_stmt);
+  static Table convert_create_statement(
+      const hsql::CreateStatement* create_stmt,
+      const std::unordered_map<std::string, std::vector<ColumnCheckConstraint>>& check_map);
 
  public:
   static std::vector<TablePtr> parse(const std::string& sql);

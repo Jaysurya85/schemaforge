@@ -568,6 +568,17 @@ run_valid "valid/text_fk_email" "tests/valid/text_fk_email/schema.sql"
 run_valid "valid/text_fk_table_key" "tests/valid/text_fk_table_key/schema.sql"
 run_valid "valid/varchar_fk" "tests/valid/varchar_fk/schema.sql"
 run_valid "valid/unique_text_fk_within_capacity" "tests/valid/unique_text_fk_within_capacity/schema.sql"
+run_valid "valid/check_greater_equal" "tests/valid/check_greater_equal/schema.sql"
+run_valid "valid/check_less_equal" "tests/valid/check_less_equal/schema.sql"
+run_valid "valid/check_greater_than" "tests/valid/check_greater_than/schema.sql"
+run_valid "valid/check_less_than" "tests/valid/check_less_than/schema.sql"
+run_valid "valid/check_between" "tests/valid/check_between/schema.sql"
+run_valid "valid/check_text_in" "tests/valid/check_text_in/schema.sql"
+run_valid "valid/check_numeric_in" "tests/valid/check_numeric_in/schema.sql"
+run_valid "valid/check_decimal_min" "tests/valid/check_decimal_min/schema.sql"
+run_valid "valid/composite_unique_int" "tests/valid/composite_unique_int/schema.sql"
+run_valid "valid/composite_unique_text" "tests/valid/composite_unique_text/schema.sql"
+run_valid "valid/composite_unique_fk" "tests/valid/composite_unique_fk/schema.sql"
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
 run_sqlite_disabled
 run_sql_literal_formatting
@@ -592,6 +603,34 @@ require_artifact_contains "valid/varchar_fk_output" "${ARTIFACT_DIR}/valid_varch
   "VALUES (1, 'products_key_8');"
 require_artifact_contains "valid/unique_text_fk_within_capacity_output" "${ARTIFACT_DIR}/valid_unique_text_fk_within_capacity.sql" \
   "VALUES (1, 'email_1@example.com');"
+require_artifact_contains "valid/check_greater_equal_output" "${ARTIFACT_DIR}/valid_check_greater_equal.sql" \
+  "VALUES (1, 18);"
+require_artifact_contains "valid/check_less_equal_output" "${ARTIFACT_DIR}/valid_check_less_equal.sql" \
+  "VALUES (1, 1);"
+require_artifact_contains "valid/check_greater_than_output" "${ARTIFACT_DIR}/valid_check_greater_than.sql" \
+  "VALUES (1, 1);"
+require_artifact_contains "valid/check_less_than_output" "${ARTIFACT_DIR}/valid_check_less_than.sql" \
+  "VALUES (1, 1);"
+require_artifact_contains "valid/check_between_output" "${ARTIFACT_DIR}/valid_check_between.sql" \
+  "VALUES (1, 18);"
+require_artifact_contains "valid/check_text_in_output" "${ARTIFACT_DIR}/valid_check_text_in.sql" \
+  "VALUES (1, 'pending');"
+require_artifact_contains "valid/check_text_in_cycle_output" "${ARTIFACT_DIR}/valid_check_text_in.sql" \
+  "VALUES (3, 'cancelled');"
+require_artifact_contains "valid/check_numeric_in_output" "${ARTIFACT_DIR}/valid_check_numeric_in.sql" \
+  "VALUES (1, 10);"
+require_artifact_contains "valid/check_decimal_min_output" "${ARTIFACT_DIR}/valid_check_decimal_min.sql" \
+  "VALUES (1, 0.00);"
+require_artifact_contains "valid/composite_unique_int_output_first" "${ARTIFACT_DIR}/valid_composite_unique_int.sql" \
+  "VALUES (1, 1, 1);"
+require_artifact_contains "valid/composite_unique_int_output_nested" "${ARTIFACT_DIR}/valid_composite_unique_int.sql" \
+  "VALUES (2, 1, 2);"
+require_artifact_contains "valid/composite_unique_text_output" "${ARTIFACT_DIR}/valid_composite_unique_text.sql" \
+  "VALUES (2, 'user_key_1', 'product_key_2');"
+require_artifact_contains "valid/composite_unique_fk_output_first" "${ARTIFACT_DIR}/valid_composite_unique_fk.sql" \
+  "VALUES (1, 1, 1);"
+require_artifact_contains "valid/composite_unique_fk_output_nested" "${ARTIFACT_DIR}/valid_composite_unique_fk.sql" \
+  "VALUES (2, 1, 2);"
 
 run_invalid "invalid/missing_fk_table" "tests/invalid/missing_fk_table/schema.sql" "Referenced table 'users' not found"
 run_invalid "invalid/missing_fk_column" "tests/invalid/missing_fk_column/schema.sql" "Referenced column 'user_id' not found"
@@ -616,6 +655,12 @@ run_invalid "invalid/unsupported_char_fk" "tests/invalid/unsupported_char_fk/sch
 run_invalid "invalid/unique_fk_too_many_children" "tests/invalid/unique_fk_too_many_children/schema.sql" "UNIQUE foreign key" --rows orders=25
 run_invalid "invalid/unique_text_fk_too_many_children" "tests/invalid/unique_text_fk_too_many_children/schema.sql" "UNIQUE foreign key" --rows orders=25
 run_invalid "invalid/zero_parent_rows_for_fk" "tests/invalid/zero_parent_rows_for_fk/schema.sql" "references table 'users', but that table has 0 rows" --rows users=0 --rows orders=5
+run_invalid "invalid/unique_check_range_too_many" "tests/invalid/unique_check_range_too_many/schema.sql" "Column users.age is UNIQUE CHECK and can only produce 13 distinct values." --rows users=14
+run_invalid "invalid/unique_check_in_too_many" "tests/invalid/unique_check_in_too_many/schema.sql" "Column users.status is UNIQUE CHECK and can only produce 2 distinct values." --rows users=3
+run_invalid "invalid/unsupported_check" "tests/invalid/unsupported_check/schema.sql" "Unsupported CHECK constraint on users.age: CHECK (age + score > 100)"
+run_invalid "invalid/composite_unique_fk_too_many" "tests/invalid/composite_unique_fk_too_many/schema.sql" "Composite UNIQUE(user_id, product_id) on table 'order_items' can only produce 200 distinct tuples." --rows users=10 --rows products=20 --rows order_items=250
+run_invalid "invalid/composite_unique_check_too_many" "tests/invalid/composite_unique_check_too_many/schema.sql" "Composite UNIQUE(age, status) on table 'users' can only produce 4 distinct tuples." --rows users=5
+run_invalid "invalid/composite_unique_missing_column" "tests/invalid/composite_unique_missing_column/schema.sql" "Unique constraint on table 'cart_items' references an unknown column"
 run_invalid "invalid/multiple_errors" "tests/invalid/multiple_errors/schema.sql" "Duplicate column name 'users.id'"
 run_config_unknown_table
 run_missing_schema_path
