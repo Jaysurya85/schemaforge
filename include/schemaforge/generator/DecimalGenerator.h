@@ -2,8 +2,9 @@
 #include <string>
 #include <vector>
 
+#include "schemaforge/generator/GeneratedValue.h"
+
 namespace schemaforge {
-using Data = std::string;
 
 class DecimalGenerator {
  private:
@@ -12,6 +13,6 @@ class DecimalGenerator {
  public:
   DecimalGenerator();
   explicit DecimalGenerator(std::string column_name);
-  std::vector<Data> generate(int size);
+  std::vector<GeneratedValue> generate(int size);
 };
 }  // namespace schemaforge

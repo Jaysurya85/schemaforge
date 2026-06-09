@@ -10,9 +10,8 @@ namespace schemaforge {
 
 class SqlInsertWriter {
  private:
-  static bool should_quote(DataType data_type);
   static std::string escape_sql_string(const std::string& value);
-  static std::string format_value(const Column& column, const Data& value);
+  static std::string format_value(const Column& column, const GeneratedValue& value);
   static std::string write_row(const TableData& table_data, std::size_t row_index);
 
  public:

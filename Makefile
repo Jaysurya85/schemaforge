@@ -8,5 +8,5 @@ build:
 	cmake --build build
 
 run: 
-	./build/schemaforge init --schema schema.sql --config schemaforge.yaml
+	./build/schemaforge init --schema tests/valid/basic_fk/schema.sql --config schemaforge.yaml
 	./build/schemaforge generate --config schemaforge.yaml

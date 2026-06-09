@@ -1,9 +1,11 @@
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "schemaforge/benchmark/BenchmarkEngine.h"
 #include "schemaforge/config/GenerationConfig.h"
 #include "schemaforge/generator/GenerationPlan.h"
 #include "schemaforge/graph/DependencyGraph.h"
@@ -12,9 +14,7 @@
 #include "schemaforge/parser/ParserAdapter.h"
 #include "schemaforge/schema/Table.h"
 #include "schemaforge/validation/CapacityAnalyzer.h"
-#include "schemaforge/validation/GenerationFeasibilityValidator.h"
-#include "schemaforge/validation/SQLiteValidator.h"
-#include "schemaforge/validation/SchemaValidator.h"
+#include "schemaforge/validation/ValidationRunner.h"
 
 namespace {
 
@@ -24,6 +24,11 @@ struct SchemaAnalysis {
   std::vector<schemaforge::TableId> table_order;
 };
 
+double elapsed_seconds(std::chrono::steady_clock::time_point start,
+                       std::chrono::steady_clock::time_point end) {
+  return std::chrono::duration<double>(end - start).count();
+}
+
 void print_usage() {
   std::cerr << "Usage:\n"
             << "  schemaforge init [--schema schema.sql] [--config schemaforge.yaml] "
@@ -31,15 +36,25 @@ void print_usage() {
             << "  schemaforge generate [--config schemaforge.yaml]\n";
 }
 
-SchemaAnalysis analyze_schema(const std::string& schema_path) {
+SchemaAnalysis analyze_schema(const std::string& schema_path, bool verbose) {
+  schemaforge::ValidationResult schema_file_validation =
+      schemaforge::ValidationRunner::validate_schema_file(schema_path);
+  if (!schema_file_validation.is_valid) {
+    std::cout << schema_file_validation << "\n";
+    return {.sql = {}, .sorted_tables = {}, .table_order = {}};
+  }
+
   std::string sql = schemaforge::FileReader::read_file(schema_path);
 
   std::cout << "Welcome to Schemaforge" << '\n';
   std::cout << "Schema file: " << schema_path << '\n';
-  std::cout << "Parsing SQL:\n" << sql << "\n\n";
+  if (verbose) {
+    std::cout << "Parsing SQL:\n" << sql << "\n\n";
+  }
 
   std::vector<schemaforge::TablePtr> tables = schemaforge::ParserAdapter::parse(sql);
-  schemaforge::ValidationResult validation_result = schemaforge::SchemaValidator::validate(tables);
+  schemaforge::ValidationResult validation_result =
+      schemaforge::ValidationRunner::validate_schema(tables);
 
   std::cout << validation_result << "\n";
   if (!validation_result.is_valid) {
@@ -49,8 +64,10 @@ SchemaAnalysis analyze_schema(const std::string& schema_path) {
   schemaforge::ParserAdapter::foreign_key_resolver(tables);
 
   std::cout << tables.size() << " tables parsed.\n";
-  for (const auto& table : tables) {
-    std::cout << *table << "\n\n";
+  if (verbose) {
+    for (const auto& table : tables) {
+      std::cout << *table << "\n\n";
+    }
   }
 
   auto dependency_graph = schemaforge::DependencyGraph();
@@ -67,7 +84,9 @@ SchemaAnalysis analyze_schema(const std::string& schema_path) {
   std::vector<schemaforge::TablePtr> sorted_tables =
       schemaforge::DependencyGraph::get_sorted_tables(std::move(tables), table_sort_result.order);
 
-  std::cout << dependency_graph << "\n";
+  if (verbose) {
+    std::cout << dependency_graph << "\n";
+  }
 
   std::cout << "Topologically sorted tables:\n";
   for (const auto& table_ptr : sorted_tables) {
@@ -102,7 +121,7 @@ int run_init(int argc, char* argv[]) {
     return 1;
   }
 
-  SchemaAnalysis analysis = analyze_schema(generation_config.schema_path);
+  SchemaAnalysis analysis = analyze_schema(generation_config.schema_path, true);
   if (analysis.sorted_tables.empty() && !analysis.table_order.empty()) {
     return 1;
   }
@@ -126,36 +145,46 @@ int run_generate(int argc, char* argv[]) {
   if (!generation_config.read_context_file(config_path)) {
     return 1;
   }
+  const auto command_start = std::chrono::steady_clock::now();
+  schemaforge::BenchmarkReport benchmark_report;
 
   if (generation_config.output_format != "sql") {
     std::cerr << "Unsupported output format: " << generation_config.output_format << '\n';
     return 1;
   }
 
-  SchemaAnalysis analysis = analyze_schema(generation_config.schema_path);
+  SchemaAnalysis analysis = analyze_schema(generation_config.schema_path, false);
   if (analysis.table_order.empty()) {
+    return 1;
+  }
+
+  schemaforge::ValidationResult config_validation_result =
+      schemaforge::ValidationRunner::validate_config(analysis.sorted_tables, generation_config);
+  std::cout << "Config " << config_validation_result << "\n";
+  if (!config_validation_result.is_valid) {
     return 1;
   }
 
   schemaforge::SchemaCapacityInfo capacity_info =
       schemaforge::CapacityAnalyzer::analyze(analysis.sorted_tables, generation_config);
 
-  schemaforge::GenerationFeasibilityValidator validator(capacity_info);
   schemaforge::ValidationResult generation_validation_result =
-      validator.validate(analysis.sorted_tables, generation_config, capacity_info);
+      schemaforge::ValidationRunner::validate_generation(analysis.sorted_tables, generation_config,
+                                                         capacity_info);
 
   std::cout << "Generation " << generation_validation_result << "\n";
   if (!generation_validation_result.is_valid) {
     return 1;
   }
 
+  const auto generation_start = std::chrono::steady_clock::now();
   std::vector<schemaforge::TableData> table_data =
       schemaforge::GenerationPlan::generate_table_data(analysis.sorted_tables, generation_config);
 
-  std::cout << "Generated table data:\n";
-  for (const auto& table : table_data) {
-    std::cout << table << "\n\n";
-  }
+  const auto generation_end = std::chrono::steady_clock::now();
+
+  benchmark_report.generation_time_seconds = elapsed_seconds(generation_start, generation_end);
+  schemaforge::BenchmarkEngine::record_generated_rows(benchmark_report, table_data);
 
   std::vector<std::string> insert_statements =
       schemaforge::SqlInsertWriter::write_inserts(table_data);
@@ -167,14 +196,37 @@ int run_generate(int argc, char* argv[]) {
   std::cout << "Wrote SQL INSERT statements to " << generation_config.output_file << '\n';
 
   if (generation_config.sqlite_validation) {
+    const auto validation_start = std::chrono::steady_clock::now();
     schemaforge::ValidationResult sqlite_validation_result =
-        schemaforge::SQLiteValidator::validate(analysis.sql, insert_statements);
+        schemaforge::ValidationRunner::validate_sqlite(analysis.sql, insert_statements);
+    const auto validation_end = std::chrono::steady_clock::now();
+    benchmark_report.validation_time_seconds = elapsed_seconds(validation_start, validation_end);
+    benchmark_report.sqlite_validation_status = sqlite_validation_result.is_valid
+                                                    ? schemaforge::SQLiteValidationStatus::Passed
+                                                    : schemaforge::SQLiteValidationStatus::Failed;
 
     std::cout << "\nSQLite " << sqlite_validation_result << "\n";
     if (!sqlite_validation_result.is_valid) {
+      benchmark_report.total_command_time_seconds =
+          elapsed_seconds(command_start, std::chrono::steady_clock::now());
+      schemaforge::BenchmarkEngine::write_report(benchmark_report,
+                                                 generation_config.benchmark_file);
       return 1;
     }
+  } else {
+    benchmark_report.sqlite_validation_status = schemaforge::SQLiteValidationStatus::Skipped;
   }
+
+  benchmark_report.total_command_time_seconds =
+      elapsed_seconds(command_start, std::chrono::steady_clock::now());
+  if (!schemaforge::BenchmarkEngine::write_report(benchmark_report,
+                                                  generation_config.benchmark_file)) {
+    return 1;
+  }
+
+  std::cout << "Wrote benchmark report to " << generation_config.benchmark_file << '\n';
+  std::cout << "Total rows generated: " << benchmark_report.total_rows << '\n';
+  std::cout << "Generation time: " << benchmark_report.generation_time_seconds << "s\n";
 
   return 0;
 }

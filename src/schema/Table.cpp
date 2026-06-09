@@ -3,15 +3,20 @@
 namespace schemaforge {
 Table::Table(std::string table_name, std::vector<ColumnPtr> columns,
              std::vector<TableConstraint> table_contraints,
-             std::vector<ForeignKeySpec> foreign_key_specs, std::vector<ForeignKey> foreign_keys)
+             std::vector<ForeignKeySpec> foreign_key_specs, std::vector<ForeignKey> foreign_keys,
+             std::vector<ColumnCheckConstraint> check_constraints)
     : table_name(std::move(table_name)),
       columns(std::move(columns)),
       table_contraints(std::move(table_contraints)),
       foreign_key_specs(std::move(foreign_key_specs)),
-      foreign_keys(std::move(foreign_keys)) {}
+      foreign_keys(std::move(foreign_keys)),
+      check_constraints(std::move(check_constraints)) {}
 std::string Table::get_table_name() const { return table_name; };
 const std::vector<ColumnPtr>& Table::get_columns() const { return columns; };
 const std::vector<TableConstraint>& Table::get_table_constraints() const { return table_contraints; }
+const std::vector<ColumnCheckConstraint>& Table::get_check_constraints() const {
+  return check_constraints;
+}
 const std::vector<ForeignKeySpec>& Table::get_foreign_key_specs() const { return foreign_key_specs; }
 const std::vector<ForeignKey>& Table::get_foreign_keys() const { return foreign_keys; };
 

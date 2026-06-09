@@ -1,0 +1,16 @@
+schema: tests/valid/basic_fk/schema.sql
+generation:
+  seed: 42
+  default_rows: 10
+output:
+  file: output.sql
+  format: sql
+validation:
+  sqlite: true
+benchmark:
+  file: benchmark.yaml
+tables:
+  users:
+    rows: 10
+  orders:
+    rows: 10

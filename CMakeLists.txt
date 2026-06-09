@@ -11,13 +11,14 @@ find_package(yaml-cpp REQUIRED)
 
 add_executable(schemaforge
     src/main.cpp
+    src/benchmark/BenchmarkEngine.cpp
     src/parser/ParserAdapter.cpp
     src/schema/Table.cpp
     src/schema/Column.cpp
-    src/validation/SchemaValidator.cpp
     src/validation/CapacityAnalyzer.cpp
-    src/validation/GenerationFeasibilityValidator.cpp
     src/validation/SQLiteValidator.cpp
+    src/validation/ValidationResult.cpp
+    src/validation/ValidationRunner.cpp
     src/graph/DependencyGraph.cpp
     src/config/GenerationConfig.cpp
     src/generator/GenerationPlan.cpp
@@ -37,6 +38,6 @@ target_include_directories(schemaforge PRIVATE
 
 target_link_libraries(schemaforge PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/external/sql-parser/libsqlparser.so
-    SQLite::SQLite3
+    SQLite3::SQLite3
     yaml-cpp::yaml-cpp
 )

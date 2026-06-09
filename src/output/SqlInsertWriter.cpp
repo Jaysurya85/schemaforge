@@ -1,32 +1,44 @@
 #include "schemaforge/output/SqlInsertWriter.h"
 
+#include <cstdint>
+#include <iomanip>
 #include <sstream>
 
 namespace schemaforge {
 
-bool SqlInsertWriter::should_quote(DataType data_type) {
-  switch (data_type) {
-    case DataType::CHAR:
-    case DataType::DATE:
-    case DataType::DATETIME:
-    case DataType::TEXT:
-    case DataType::TIME:
-    case DataType::VARCHAR:
-      return true;
-    case DataType::BIGINT:
-    case DataType::BOOLEAN:
-    case DataType::DECIMAL:
-    case DataType::DOUBLE:
-    case DataType::FLOAT:
-    case DataType::INT:
-    case DataType::LONG:
-    case DataType::REAL:
-    case DataType::SMALLINT:
-    case DataType::UNKNOWN:
-    default:
-      return false;
-  }
+namespace {
+
+template <class... Ts>
+struct Overloaded : Ts... {
+  using Ts::operator()...;
+};
+
+template <class... Ts>
+Overloaded(Ts...) -> Overloaded<Ts...>;
+
+std::string format_numeric(double value) {
+  std::ostringstream output;
+  output << std::fixed << std::setprecision(2) << value;
+  return output.str();
 }
+
+std::string zero_padded(int value, int width) {
+  std::ostringstream output;
+  output << std::setw(width) << std::setfill('0') << value;
+  return output.str();
+}
+
+std::string format_date(const DateValue& value) {
+  return zero_padded(value.year, 4) + "-" + zero_padded(value.month, 2) + "-" +
+         zero_padded(value.day, 2);
+}
+
+std::string format_time(const TimeValue& value) {
+  return zero_padded(value.hour, 2) + ":" + zero_padded(value.minute, 2) + ":" +
+         zero_padded(value.second, 2);
+}
+
+}  // namespace
 
 std::string SqlInsertWriter::escape_sql_string(const std::string& value) {
   std::string escaped;
@@ -43,12 +55,21 @@ std::string SqlInsertWriter::escape_sql_string(const std::string& value) {
   return escaped;
 }
 
-std::string SqlInsertWriter::format_value(const Column& column, const Data& value) {
-  if (!should_quote(column.get_column_type().data_type)) {
-    return value;
-  }
-
-  return "'" + escape_sql_string(value) + "'";
+std::string SqlInsertWriter::format_value(const Column& column, const GeneratedValue& value) {
+  (void)column;
+  return value.visit(Overloaded{
+      [](std::monostate) { return std::string("NULL"); },
+      [](std::int64_t integer_value) { return std::to_string(integer_value); },
+      [](double numeric_value) { return format_numeric(numeric_value); },
+      [](const std::string& text_value) { return "'" + escape_sql_string(text_value) + "'"; },
+      [](bool boolean_value) { return std::string(boolean_value ? "true" : "false"); },
+      [](const DateValue& date_value) { return "'" + format_date(date_value) + "'"; },
+      [](const TimeValue& time_value) { return "'" + format_time(time_value) + "'"; },
+      [](const DateTimeValue& date_time_value) {
+        return "'" + format_date(date_time_value.date) + " " + format_time(date_time_value.time) +
+               "'";
+      },
+  });
 }
 
 std::string SqlInsertWriter::write_row(const TableData& table_data, std::size_t row_index) {

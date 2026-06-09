@@ -1,0 +1,12 @@
+generation:
+  rows:
+    users: 10
+    orders: 10
+  total_rows: 20
+  time_seconds: 7.2011e-05
+  throughput_rows_per_second: 277735.34598880727
+validation:
+  sqlite: passed
+  time_seconds: 0.000405979
+total:
+  command_time_seconds: 0.000841038

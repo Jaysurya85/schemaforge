@@ -1,13 +1,13 @@
 #pragma once
-#include <string>
 #include <vector>
 
+#include "schemaforge/generator/GeneratedValue.h"
+
 namespace schemaforge {
-using Data = std::string;
 
 class BooleanGenerator {
  public:
   BooleanGenerator() = default;
-  std::vector<Data> generate(int size);
+  std::vector<GeneratedValue> generate(int size);
 };
 }  // namespace schemaforge

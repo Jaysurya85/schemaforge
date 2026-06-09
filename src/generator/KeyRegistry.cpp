@@ -1,17 +1,105 @@
 #include "schemaforge/generator/KeyRegistry.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <functional>
+#include <optional>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 namespace schemaforge {
 
 namespace {
 
 bool is_integer_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT;
+  return data_type == DataType::INT || data_type == DataType::BIGINT ||
+         data_type == DataType::SMALLINT;
 }
 
-bool is_single_integer_key(const TableConstraint& constraint) {
+bool is_text_type(DataType data_type) {
+  return data_type == DataType::TEXT || data_type == DataType::VARCHAR;
+}
+
+bool is_email_column(std::string column_name) {
+  std::ranges::transform(column_name, column_name.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+  return column_name.find("email") != std::string::npos && !column_name.ends_with("_id") &&
+         !column_name.ends_with("id");
+}
+
+struct EffectiveCheckConstraint {
+  std::optional<double> min_value;
+  std::optional<double> max_value;
+  std::vector<GeneratedValue> allowed_values;
+};
+
+EffectiveCheckConstraint effective_check_for_column(const Table* table, const Column* column) {
+  EffectiveCheckConstraint effective;
+  for (const auto& check : table->get_check_constraints()) {
+    if (check.column != column) {
+      continue;
+    }
+    if (check.type == CheckConstraintType::AllowedValues) {
+      effective.allowed_values = check.allowed_values;
+      continue;
+    }
+    if (check.type == CheckConstraintType::Range) {
+      if (check.min_value.has_value()) {
+        effective.min_value =
+            effective.min_value.has_value()
+                ? std::max(effective.min_value.value(), check.min_value.value())
+                : check.min_value.value();
+      }
+      if (check.max_value.has_value()) {
+        effective.max_value =
+            effective.max_value.has_value()
+                ? std::min(effective.max_value.value(), check.max_value.value())
+                : check.max_value.value();
+      }
+    }
+  }
+  return effective;
+}
+
+GeneratedValue coerce_allowed_value(const GeneratedValue& value, DataType data_type) {
+  return value.visit([data_type, &value](const auto& typed_value) -> GeneratedValue {
+    using ValueType = std::decay_t<decltype(typed_value)>;
+    if constexpr (std::is_same_v<ValueType, double>) {
+      if (is_integer_type(data_type)) {
+        return GeneratedValue::integer(static_cast<std::int64_t>(typed_value));
+      }
+      return GeneratedValue::numeric(typed_value);
+    } else if constexpr (std::is_same_v<ValueType, std::string>) {
+      return GeneratedValue::text(typed_value);
+    } else {
+      return value;
+    }
+  });
+}
+
+int char_length(const Column* column) {
+  const int64_t parsed_length = column->get_column_type().length;
+  if (parsed_length <= 0) {
+    return 1;
+  }
+  return static_cast<int>(parsed_length);
+}
+
+std::string char_value_at(int row_index, int length) {
+  int value = row_index;
+  std::string result(static_cast<std::size_t>(length), 'A');
+  for (int index = length - 1; index >= 0; --index) {
+    result[static_cast<std::size_t>(index)] = static_cast<char>('A' + (value % 26));
+    value /= 26;
+  }
+  return result;
+}
+
+bool is_single_key_constraint(const TableConstraint& constraint) {
   if (constraint.columns.size() != 1) {
     return false;
   }
@@ -21,7 +109,7 @@ bool is_single_integer_key(const TableConstraint& constraint) {
   }
 
   const Column* column = constraint.columns.front();
-  return column != nullptr && is_integer_type(column->get_column_type().data_type);
+  return column != nullptr;
 }
 
 std::string key_name(const Table* table) {
@@ -57,40 +145,103 @@ KeyRegistry::KeyRef KeyRegistry::make_key(const Table* table, const std::vector<
 
 void KeyRegistry::register_int_range(const Table* table, const std::vector<Column*>& columns,
                                      int start, int count) {
-  int_range_sources[make_key(table, columns)] = IntRangeKeySource{.start = start, .count = count};
+  key_sources[make_key(table, columns)] = IntRangeKeySource{.start = start, .count = count};
 }
 
-std::vector<Data> KeyRegistry::random_key(const Table* table, const std::vector<Column*>& columns,
-                                          RandomEngine& random_engine) const {
-  const auto key_source = int_range_sources.find(make_key(table, columns));
-  if (key_source == int_range_sources.end()) {
+void KeyRegistry::register_pattern(const Table* table, const std::vector<Column*>& columns,
+                                   PatternKeyKind kind, std::string prefix, int length,
+                                   int count) {
+  key_sources[make_key(table, columns)] =
+      PatternKeySource{.kind = kind, .prefix = std::move(prefix), .length = length, .count = count};
+}
+
+GeneratedValue KeyRegistry::value_at_row(const PatternKeySource& source, std::size_t row_index) {
+  if (row_index >= static_cast<std::size_t>(source.count)) {
+    throw std::runtime_error("Referenced pattern key source does not have enough values");
+  }
+
+  switch (source.kind) {
+    case PatternKeyKind::Email:
+      return GeneratedValue::text("email_" + std::to_string(row_index + 1) + "@example.com");
+    case PatternKeyKind::Char:
+      return GeneratedValue::text(char_value_at(static_cast<int>(row_index), source.length));
+    case PatternKeyKind::ColumnKey:
+      return GeneratedValue::text(source.prefix + "_" + std::to_string(row_index + 1));
+    case PatternKeyKind::TableKey:
+    default:
+      return GeneratedValue::text(source.prefix + "_key_" + std::to_string(row_index + 1));
+  }
+}
+
+std::vector<GeneratedValue> KeyRegistry::random_key(const Table* table,
+                                                    const std::vector<Column*>& columns,
+                                                    RandomEngine& random_engine) const {
+  const auto key_source = key_sources.find(make_key(table, columns));
+  if (key_source == key_sources.end()) {
     throw std::runtime_error("No key source registered for referenced key '" + key_name(table) +
                              "'");
   }
 
-  if (key_source->second.count <= 0) {
-    throw std::runtime_error("Referenced key source for table '" + key_name(table) +
-                             "' has no values");
-  }
-
-  const int offset = random_engine.next_int(0, key_source->second.count - 1);
-  return {std::to_string(key_source->second.start + offset)};
+  return std::visit(
+      [&](const auto& source) -> std::vector<GeneratedValue> {
+        if constexpr (std::is_same_v<std::decay_t<decltype(source)>, IntRangeKeySource>) {
+          if (source.count <= 0) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' has no values");
+          }
+          const int offset = random_engine.next_int(0, source.count - 1);
+          return {GeneratedValue::integer(source.start + offset)};
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(source)>, PatternKeySource>) {
+          if (source.count <= 0) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' has no values");
+          }
+          const int offset = random_engine.next_int(0, source.count - 1);
+          return {value_at_row(source, static_cast<std::size_t>(offset))};
+        } else {
+          if (source.values.empty()) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' has no values");
+          }
+          const int offset = random_engine.next_int(0, static_cast<int>(source.values.size()) - 1);
+          return {source.values[static_cast<std::size_t>(offset)]};
+        }
+      },
+      key_source->second);
 }
 
-std::vector<Data> KeyRegistry::key_at_row(const Table* table, const std::vector<Column*>& columns,
-                                          std::size_t row_index) const {
-  const auto key_source = int_range_sources.find(make_key(table, columns));
-  if (key_source == int_range_sources.end()) {
+std::vector<GeneratedValue> KeyRegistry::key_at_row(const Table* table,
+                                                    const std::vector<Column*>& columns,
+                                                    std::size_t row_index) const {
+  const auto key_source = key_sources.find(make_key(table, columns));
+  if (key_source == key_sources.end()) {
     throw std::runtime_error("No key source registered for referenced key '" + key_name(table) +
                              "'");
   }
 
-  if (row_index >= static_cast<std::size_t>(key_source->second.count)) {
-    throw std::runtime_error("Referenced key source for table '" + key_name(table) +
-                             "' does not have enough values");
-  }
-
-  return {std::to_string(key_source->second.start + static_cast<int>(row_index))};
+  return std::visit(
+      [&](const auto& source) -> std::vector<GeneratedValue> {
+        if constexpr (std::is_same_v<std::decay_t<decltype(source)>, IntRangeKeySource>) {
+          if (row_index >= static_cast<std::size_t>(source.count)) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' does not have enough values");
+          }
+          return {GeneratedValue::integer(source.start + static_cast<int>(row_index))};
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(source)>, PatternKeySource>) {
+          if (row_index >= static_cast<std::size_t>(source.count)) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' does not have enough values");
+          }
+          return {value_at_row(source, row_index)};
+        } else {
+          if (row_index >= source.values.size()) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' does not have enough values");
+          }
+          return {source.values[row_index]};
+        }
+      },
+      key_source->second);
 }
 
 KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
@@ -101,11 +252,50 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
     const Table* table = table_ptr.get();
     const int row_count = config.get_row_count(table->get_table_name());
     for (const auto& constraint : table->get_table_constraints()) {
-      if (!is_single_integer_key(constraint)) {
+      if (!is_single_key_constraint(constraint)) {
         continue;
       }
 
-      key_registry.register_int_range(table, constraint.columns, 1, row_count);
+      const Column* column = constraint.columns.front();
+      const DataType data_type = column->get_column_type().data_type;
+      const EffectiveCheckConstraint effective_check = effective_check_for_column(table, column);
+      if (!effective_check.allowed_values.empty()) {
+        std::vector<GeneratedValue> values;
+        values.reserve(effective_check.allowed_values.size());
+        for (const auto& value : effective_check.allowed_values) {
+          values.push_back(coerce_allowed_value(value, data_type));
+        }
+        key_registry.key_sources[make_key(table, constraint.columns)] =
+            AllowedValuesKeySource{.values = std::move(values)};
+        continue;
+      }
+
+      if (is_integer_type(data_type)) {
+        const int start =
+            static_cast<int>(std::ceil(effective_check.min_value.value_or(1.0)));
+        const int end =
+            static_cast<int>(std::floor(effective_check.max_value.value_or(start + row_count - 1)));
+        const int count = std::max(0, end - start + 1);
+        key_registry.register_int_range(table, constraint.columns, start, count);
+        continue;
+      }
+
+      if (is_text_type(data_type)) {
+        const bool email_column = is_email_column(column->get_column_name());
+        const PatternKeyKind kind =
+            email_column ? PatternKeyKind::Email
+                         : constraint.type == ConstraintType::PrimaryKey ? PatternKeyKind::TableKey
+                                                                         : PatternKeyKind::ColumnKey;
+        const std::string prefix =
+            kind == PatternKeyKind::TableKey ? table->get_table_name() : column->get_column_name();
+        key_registry.register_pattern(table, constraint.columns, kind, prefix, 0, row_count);
+        continue;
+      }
+
+      if (data_type == DataType::CHAR) {
+        key_registry.register_pattern(table, constraint.columns, PatternKeyKind::Char,
+                                      table->get_table_name(), char_length(column), row_count);
+      }
     }
   }
 
