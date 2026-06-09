@@ -1,8 +1,11 @@
 #include "schemaforge/validation/ValidationRunner.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <functional>
+#include <regex>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,14 +23,125 @@ using GenerationCheck = std::function<void(const std::vector<TablePtr>&, const G
 
 bool is_supported_generation_type(DataType data_type) {
   return data_type == DataType::INT || data_type == DataType::BIGINT ||
-         data_type == DataType::TEXT || data_type == DataType::VARCHAR ||
+         data_type == DataType::SMALLINT || data_type == DataType::TEXT ||
+         data_type == DataType::VARCHAR || data_type == DataType::CHAR ||
          data_type == DataType::DECIMAL || data_type == DataType::FLOAT ||
          data_type == DataType::DOUBLE || data_type == DataType::REAL ||
-         data_type == DataType::BOOLEAN;
+         data_type == DataType::BOOLEAN || data_type == DataType::DATE ||
+         data_type == DataType::DATETIME || data_type == DataType::TIME;
 }
 
 bool is_integer_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT;
+  return data_type == DataType::INT || data_type == DataType::BIGINT ||
+         data_type == DataType::SMALLINT;
+}
+
+bool is_char_type(DataType data_type) {
+  return data_type == DataType::CHAR;
+}
+
+std::string uppercase(std::string value) {
+  std::ranges::transform(value, value.begin(), [](unsigned char character) {
+    return static_cast<char>(std::toupper(character));
+  });
+  return value;
+}
+
+std::string trim(const std::string& value) {
+  const auto begin = std::ranges::find_if(value, [](unsigned char character) {
+    return std::isspace(character) == 0;
+  });
+  if (begin == value.end()) {
+    return "";
+  }
+
+  const auto end = std::find_if(value.rbegin(), value.rend(), [](unsigned char character) {
+    return std::isspace(character) == 0;
+  }).base();
+  return std::string(begin, end);
+}
+
+std::vector<std::string> split_table_body_columns(const std::string& table_body) {
+  std::vector<std::string> definitions;
+  std::string current;
+  int parenthesis_depth = 0;
+
+  for (const char character : table_body) {
+    if (character == '(') {
+      parenthesis_depth++;
+    } else if (character == ')' && parenthesis_depth > 0) {
+      parenthesis_depth--;
+    }
+
+    if (character == ',' && parenthesis_depth == 0) {
+      const std::string definition = trim(current);
+      if (!definition.empty()) {
+        definitions.push_back(definition);
+      }
+      current.clear();
+      continue;
+    }
+
+    current += character;
+  }
+
+  const std::string definition = trim(current);
+  if (!definition.empty()) {
+    definitions.push_back(definition);
+  }
+
+  return definitions;
+}
+
+std::string word_at(const std::string& value, int index) {
+  std::istringstream input(value);
+  std::string word;
+  for (int current = 0; current <= index; ++current) {
+    if (!(input >> word)) {
+      return "";
+    }
+  }
+  return word;
+}
+
+std::string normalize_type_name(std::string type_name) {
+  type_name = uppercase(std::move(type_name));
+  const std::size_t parenthesis = type_name.find('(');
+  if (parenthesis != std::string::npos) {
+    type_name = type_name.substr(0, parenthesis);
+  }
+  return type_name;
+}
+
+void check_known_unsupported_types(const std::string& sql, ValidationResult& validation_result) {
+  static const std::unordered_set<std::string> unsupported_types = {
+      "JSON", "UUID", "ARRAY", "BLOB", "ENUM", "INET"};
+
+  const std::regex create_table_pattern(
+      R"(CREATE\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([\s\S]*?)\)\s*;)",
+      std::regex_constants::icase);
+
+  const auto table_end = std::sregex_iterator();
+  for (auto table_it = std::sregex_iterator(sql.begin(), sql.end(), create_table_pattern);
+       table_it != table_end; ++table_it) {
+    const std::string table_name = (*table_it)[1].str();
+    const std::string table_body = (*table_it)[2].str();
+
+    for (const auto& definition : split_table_body_columns(table_body)) {
+      const std::string first_word = uppercase(word_at(definition, 0));
+      if (first_word == "PRIMARY" || first_word == "FOREIGN" || first_word == "UNIQUE" ||
+          first_word == "CONSTRAINT" || first_word == "CHECK") {
+        continue;
+      }
+
+      const std::string column_name = word_at(definition, 0);
+      const std::string type_name = normalize_type_name(word_at(definition, 1));
+      if (unsupported_types.contains(type_name)) {
+        validation_result.errors.push_back("Unsupported generation type " + type_name +
+                                           " for column " + table_name + "." + column_name);
+      }
+    }
+  }
 }
 
 const Table* find_table(const std::vector<TablePtr>& tables, const std::string& table_name) {
@@ -425,11 +539,13 @@ void check_unsupported_pk_fk_generation_type(const std::vector<TablePtr>& tables
         continue;
       }
       for (const Column* column : constraint.columns) {
-        if (column != nullptr && !is_integer_type(column->get_column_type().data_type)) {
+        if (column != nullptr && !is_integer_type(column->get_column_type().data_type) &&
+            !is_char_type(column->get_column_type().data_type)) {
           validation_result.errors.push_back("Primary key column '" +
                                              table_ptr->get_table_name() + "." +
                                              column->get_column_name() +
-                                             "' must use INT or BIGINT for generation");
+                                             "' must use INT, BIGINT, SMALLINT, or CHAR for "
+                                             "generation");
         }
       }
     }
@@ -441,7 +557,7 @@ void check_unsupported_pk_fk_generation_type(const std::vector<TablePtr>& tables
           validation_result.errors.push_back("Foreign key column '" +
                                              table_ptr->get_table_name() + "." +
                                              local_column->get_column_name() +
-                                             "' must use INT or BIGINT for generation");
+                                             "' must use INT, BIGINT, or SMALLINT for generation");
         }
       }
     }
@@ -508,6 +624,44 @@ void check_unique_boolean_capacity(const std::vector<TablePtr>&, const Generatio
   }
 }
 
+std::string limited_column_from_reason(const std::string& reason) {
+  const std::string prefix = "Column ";
+  const std::string marker = " is ";
+  if (!reason.starts_with(prefix)) {
+    return "";
+  }
+
+  const std::size_t marker_position = reason.find(marker, prefix.size());
+  if (marker_position == std::string::npos) {
+    return "";
+  }
+
+  return reason.substr(prefix.size(), marker_position - prefix.size());
+}
+
+void check_char_capacity(const std::vector<TablePtr>&, const GenerationConfig&,
+                         const SchemaCapacityInfo& capacity_info,
+                         ValidationResult& validation_result) {
+  for (const auto& table_info : capacity_info.tables) {
+    if (table_info.requested_rows <= table_info.max_rows) {
+      continue;
+    }
+
+    const auto reason_it = std::ranges::find_if(table_info.reasons, [](const std::string& reason) {
+      return reason.find(" CHAR(") != std::string::npos;
+    });
+    if (reason_it == table_info.reasons.end()) {
+      continue;
+    }
+
+    const std::string column_name = limited_column_from_reason(*reason_it);
+    validation_result.errors.push_back("Cannot generate " +
+                                       std::to_string(table_info.requested_rows) + " rows for " +
+                                       (column_name.empty() ? table_info.table_id : column_name) +
+                                       ". " + *reason_it);
+  }
+}
+
 void check_unique_fk_capacity(const std::vector<TablePtr>& tables, const GenerationConfig& config,
                               const SchemaCapacityInfo&, ValidationResult& validation_result) {
   for (const auto& table_ptr : tables) {
@@ -557,7 +711,12 @@ ValidationResult ValidationRunner::validate_schema_file(const std::string& schem
         std::ifstream schema_file(schema_path);
         if (!schema_file.is_open()) {
           result.errors.push_back("Missing schema file: " + schema_path);
+          return;
         }
+
+        std::stringstream buffer;
+        buffer << schema_file.rdbuf();
+        check_known_unsupported_types(buffer.str(), result);
       },
   };
 
@@ -615,6 +774,7 @@ ValidationResult ValidationRunner::validate_generation(const std::vector<TablePt
   const std::vector<GenerationCheck> checks = {
       check_parent_rows_for_fk,
       check_unique_boolean_capacity,
+      check_char_capacity,
       check_unique_fk_capacity,
   };
 

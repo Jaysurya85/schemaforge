@@ -373,11 +373,19 @@ int main() {
   columns.push_back(std::make_unique<Column>("name", ColumnType{.data_type = DataType::TEXT}));
   columns.push_back(
       std::make_unique<Column>("active", ColumnType{.data_type = DataType::BOOLEAN}));
+  columns.push_back(std::make_unique<Column>("born_on", ColumnType{.data_type = DataType::DATE}));
+  columns.push_back(
+      std::make_unique<Column>("alarm", ColumnType{.data_type = DataType::TIME}));
+  columns.push_back(
+      std::make_unique<Column>("starts_at", ColumnType{.data_type = DataType::DATETIME}));
 
   const Column* id = columns[0].get();
   const Column* amount = columns[1].get();
   const Column* name = columns[2].get();
   const Column* active = columns[3].get();
+  const Column* born_on = columns[4].get();
+  const Column* alarm = columns[5].get();
+  const Column* starts_at = columns[6].get();
   Table table("samples", std::move(columns), {}, {}, {});
 
   TableData table_data{
@@ -387,13 +395,21 @@ int main() {
           ColumnData{.column = amount, .data = {GeneratedValue::numeric(12.5)}},
           ColumnData{.column = name, .data = {GeneratedValue::text("owner's sample")}},
           ColumnData{.column = active, .data = {GeneratedValue::boolean(true)}},
+          ColumnData{.column = born_on,
+                     .data = {GeneratedValue::date(DateValue{2026, 1, 1})}},
+          ColumnData{.column = alarm,
+                     .data = {GeneratedValue::time(TimeValue{12, 30, 0})}},
+          ColumnData{.column = starts_at,
+                     .data = {GeneratedValue::date_time(
+                         DateTimeValue{DateValue{2026, 1, 1}, TimeValue{12, 30, 0}})}},
       },
   };
 
   const auto inserts = SqlInsertWriter::write_inserts({table_data});
   const std::string expected =
-      "INSERT INTO samples (id, amount, name, active) VALUES (7, 12.50, "
-      "'owner''s sample', true);";
+      "INSERT INTO samples (id, amount, name, active, born_on, alarm, starts_at) VALUES "
+      "(7, 12.50, 'owner''s sample', true, '2026-01-01', '12:30:00', "
+      "'2026-01-01 12:30:00');";
 
   if (inserts.size() != 1 || inserts.front() != expected) {
     std::cerr << "Expected: " << expected << '\n';
@@ -424,6 +440,32 @@ EOF
   fi
 }
 
+require_artifact_contains() {
+  local name="$1"
+  local file="$2"
+  local expected_text="$3"
+  local log_file="${TMP_DIR}/${name//\//_}_artifact.log"
+
+  if [[ -f "${file}" ]] && grep -Fq "${expected_text}" "${file}"; then
+    record_pass "${name}"
+    return
+  fi
+
+  {
+    echo "Expected artifact to contain:"
+    echo "${expected_text}"
+    echo
+    echo "Artifact: ${file}"
+    if [[ -f "${file}" ]]; then
+      echo "----- artifact -----"
+      cat "${file}"
+    else
+      echo "Artifact does not exist."
+    fi
+  } >"${log_file}"
+  record_fail "${name}" "${log_file}"
+}
+
 cd "${ROOT_DIR}" || exit 1
 build_project
 prepare_artifacts
@@ -437,9 +479,19 @@ run_valid "valid/unique_fk_within_parent_capacity" "tests/valid/unique_fk_within
 run_valid "valid/unique_boolean_within_capacity" "tests/valid/unique_boolean_within_capacity/schema.sql" --rows flags=2
 run_valid "valid/dependency_chain" "tests/valid/dependency_chain/schema.sql"
 run_valid "valid/complex_marketplace" "tests/valid/complex_marketplace/schema.sql"
+run_valid "valid/all_supported_types" "tests/valid/all_supported_types/schema.sql"
+run_valid "valid/char_primary_key" "tests/valid/char_primary_key/schema.sql"
+run_valid "valid/char_unique_within_capacity" "tests/valid/char_unique_within_capacity/schema.sql" --rows flags=26
+run_valid "valid/char_cycle" "tests/valid/char_cycle/schema.sql" --rows flags=28
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
 run_sqlite_disabled
 run_sql_literal_formatting
+require_artifact_contains "valid/all_supported_types_output" "${ARTIFACT_DIR}/valid_all_supported_types.sql" \
+  "VALUES (1, 1, 1, 'title_1', 'slug_1', 'A', 'AA', 10.50, 10.50, 10.50, 10.50, true, '2026-01-01', '2026-01-01 00:00:00', '00:00:01');"
+require_artifact_contains "valid/char_primary_key_output" "${ARTIFACT_DIR}/valid_char_primary_key.sql" \
+  "VALUES ('AA', 'name_1');"
+require_artifact_contains "valid/char_cycle_output" "${ARTIFACT_DIR}/valid_char_cycle.sql" \
+  "VALUES (27, 'A');"
 
 run_invalid "invalid/missing_fk_table" "tests/invalid/missing_fk_table/schema.sql" "Referenced table 'users' not found"
 run_invalid "invalid/missing_fk_column" "tests/invalid/missing_fk_column/schema.sql" "Referenced column 'user_id' not found"
@@ -453,13 +505,15 @@ run_invalid "invalid/fk_type_mismatch" "tests/invalid/fk_type_mismatch/schema.sq
 run_invalid "invalid/fk_references_non_unique" "tests/invalid/fk_references_non_unique/schema.sql" "must reference a PRIMARY KEY or UNIQUE constraint"
 run_invalid "invalid/cycle" "tests/invalid/cycle/schema.sql" "Cycle detected"
 run_invalid "invalid/self_reference" "tests/invalid/self_reference/schema.sql" "Self-referencing foreign key"
-run_invalid "invalid/unsupported_pk_generation_type" "tests/invalid/unsupported_pk_generation_type/schema.sql" "Primary key column 'users.id' must use INT or BIGINT for generation"
-run_invalid "invalid/unsupported_fk_generation_type" "tests/invalid/unsupported_fk_generation_type/schema.sql" "Foreign key column 'orders.user_id' must use INT or BIGINT for generation"
-run_invalid "invalid/unsupported_date" "tests/invalid/unsupported_date/schema.sql" "unsupported generation type"
+run_invalid "invalid/unsupported_pk_generation_type" "tests/invalid/unsupported_pk_generation_type/schema.sql" "Primary key column 'users.id' must use INT, BIGINT, SMALLINT, or CHAR for generation"
+run_invalid "invalid/unsupported_fk_generation_type" "tests/invalid/unsupported_fk_generation_type/schema.sql" "Foreign key column 'orders.user_id' must use INT, BIGINT, or SMALLINT for generation"
+run_valid "valid/date_generation" "tests/invalid/unsupported_date/schema.sql"
 run_invalid "invalid/unique_boolean_too_many" "tests/invalid/unique_boolean_too_many/schema.sql" "UNIQUE BOOLEAN"
+run_invalid "invalid/unique_char_too_many" "tests/invalid/unique_char_too_many/schema.sql" "Column users.code is UNIQUE CHAR(1) and can only produce 26 distinct values." --rows users=30
+run_invalid "invalid/unsupported_json" "tests/invalid/unsupported_json/schema.sql" "Unsupported generation type JSON for column users.metadata"
 run_invalid "invalid/unique_fk_too_many_children" "tests/invalid/unique_fk_too_many_children/schema.sql" "UNIQUE foreign key" --rows orders=25
 run_invalid "invalid/zero_parent_rows_for_fk" "tests/invalid/zero_parent_rows_for_fk/schema.sql" "references table 'users', but that table has 0 rows" --rows users=0 --rows orders=5
-run_invalid_contains_all "invalid/multiple_errors" "tests/invalid/multiple_errors/schema.sql" "Duplicate column name 'users.id'" "unsupported generation type"
+run_invalid "invalid/multiple_errors" "tests/invalid/multiple_errors/schema.sql" "Duplicate column name 'users.id'"
 run_config_unknown_table
 run_missing_schema_path
 run_missing_schema_file

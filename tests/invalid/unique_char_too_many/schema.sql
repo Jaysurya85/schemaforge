@@ -1,0 +1,4 @@
+CREATE TABLE users (
+  id INT PRIMARY KEY,
+  code CHAR(1) UNIQUE
+);

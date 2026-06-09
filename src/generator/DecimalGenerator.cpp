@@ -26,17 +26,12 @@ DecimalGenerator::DecimalGenerator(std::string column_name)
     : column_name(normalize_column_name(std::move(column_name))) {}
 
 std::vector<GeneratedValue> DecimalGenerator::generate(int size) {
+  (void)column_name;
   std::vector<GeneratedValue> result;
   result.reserve(size);
 
   for (int row = 1; row <= size; ++row) {
-    double value = static_cast<double>(row) + 0.5;
-    if (column_name.find("amount") != std::string::npos) {
-      value = static_cast<double>(row * 10) + 0.5;
-    } else if (column_name.find("price") != std::string::npos) {
-      value = static_cast<double>(row) + 0.99;
-    }
-
+    const double value = static_cast<double>(row * 10) + 0.5;
     result.push_back(GeneratedValue::numeric(value));
   }
 

@@ -1,7 +1,9 @@
 #include "schemaforge/generator/ValueGenerator.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
+#include <string>
 
 #include "schemaforge/generator/BooleanGenerator.h"
 #include "schemaforge/generator/DecimalGenerator.h"
@@ -34,7 +36,8 @@ const ForeignKey* find_foreign_key(const Table& table, const Column& column) {
 }
 
 bool is_integer_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT;
+  return data_type == DataType::INT || data_type == DataType::BIGINT ||
+         data_type == DataType::SMALLINT;
 }
 
 bool is_text_type(DataType data_type) {
@@ -46,36 +49,111 @@ bool is_decimal_type(DataType data_type) {
          data_type == DataType::DOUBLE || data_type == DataType::REAL;
 }
 
-std::vector<GeneratedValue> generate_random_int_data(int num_rows, RandomEngine& random_engine) {
+int char_length(const Column& column) {
+  const int64_t parsed_length = column.get_column_type().length;
+  if (parsed_length <= 0) {
+    return 1;
+  }
+  return static_cast<int>(parsed_length);
+}
+
+std::string char_value_at(int row_index, int length) {
+  int value = row_index;
+  std::string result(static_cast<std::size_t>(length), 'A');
+  for (int index = length - 1; index >= 0; --index) {
+    result[static_cast<std::size_t>(index)] = static_cast<char>('A' + (value % 26));
+    value /= 26;
+  }
+  return result;
+}
+
+DateValue date_at(int row_index) {
+  return DateValue{.year = 2026, .month = 1, .day = row_index + 1};
+}
+
+TimeValue time_at(int seconds) {
+  return TimeValue{.hour = seconds / 3600, .minute = (seconds % 3600) / 60, .second = seconds % 60};
+}
+
+std::vector<GeneratedValue> generate_int_data(int num_rows) {
   std::vector<GeneratedValue> data;
   data.reserve(num_rows);
 
   for (int row = 0; row < num_rows; ++row) {
-    data.push_back(GeneratedValue::integer(random_engine.next_int(1, 1000)));
+    data.push_back(GeneratedValue::integer(row + 1));
   }
 
   return data;
 }
 
-std::vector<GeneratedValue> generate_random_decimal_data(int num_rows,
-                                                         RandomEngine& random_engine) {
+std::vector<GeneratedValue> generate_decimal_data(int num_rows) {
   std::vector<GeneratedValue> data;
   data.reserve(num_rows);
 
   for (int row = 0; row < num_rows; ++row) {
-    data.push_back(GeneratedValue::numeric(random_engine.next_decimal(1.0, 1000.0)));
+    data.push_back(GeneratedValue::numeric(static_cast<double>((row + 1) * 10) + 0.5));
   }
 
   return data;
 }
 
-std::vector<GeneratedValue> generate_random_boolean_data(int num_rows,
-                                                         RandomEngine& random_engine) {
+std::vector<GeneratedValue> generate_boolean_data(int num_rows) {
   std::vector<GeneratedValue> data;
   data.reserve(num_rows);
 
   for (int row = 0; row < num_rows; ++row) {
-    data.push_back(GeneratedValue::boolean(random_engine.next_bool()));
+    data.push_back(GeneratedValue::boolean(row % 2 == 0));
+  }
+
+  return data;
+}
+
+std::vector<GeneratedValue> generate_char_data(const Column& column, int num_rows) {
+  std::vector<GeneratedValue> data;
+  data.reserve(num_rows);
+  const int length = char_length(column);
+  int capacity = 1;
+  for (int index = 0; index < length; ++index) {
+    capacity *= 26;
+  }
+
+  for (int row = 0; row < num_rows; ++row) {
+    data.push_back(GeneratedValue::text(char_value_at(row % capacity, length)));
+  }
+
+  return data;
+}
+
+std::vector<GeneratedValue> generate_date_data(int num_rows) {
+  std::vector<GeneratedValue> data;
+  data.reserve(num_rows);
+
+  for (int row = 0; row < num_rows; ++row) {
+    data.push_back(GeneratedValue::date(date_at(row)));
+  }
+
+  return data;
+}
+
+std::vector<GeneratedValue> generate_time_data(int num_rows) {
+  std::vector<GeneratedValue> data;
+  data.reserve(num_rows);
+
+  for (int row = 0; row < num_rows; ++row) {
+    data.push_back(GeneratedValue::time(time_at(row + 1)));
+  }
+
+  return data;
+}
+
+std::vector<GeneratedValue> generate_date_time_data(int num_rows) {
+  std::vector<GeneratedValue> data;
+  data.reserve(num_rows);
+
+  for (int row = 0; row < num_rows; ++row) {
+    data.push_back(GeneratedValue::date_time(
+        DateTimeValue{.date = DateValue{.year = 2026, .month = 1, .day = 1},
+                      .time = time_at(row)}));
   }
 
   return data;
@@ -90,9 +168,12 @@ std::vector<GeneratedValue> ValueGenerator::generate_column_data(
   const bool has_unique_constraint = has_constraint(table, column, ConstraintType::Unique);
   const bool has_primary_key_constraint = has_constraint(table, column, ConstraintType::PrimaryKey);
   if (has_primary_key_constraint) {
-    if (!is_integer_type(column_data_type)) {
+    if (!is_integer_type(column_data_type) && column_data_type != DataType::CHAR) {
       throw std::runtime_error("Primary key column '" + column.get_column_name() +
-                               "' must use an integer type for v0.1 generation");
+                               "' must use an integer or CHAR type for generation");
+    }
+    if (column_data_type == DataType::CHAR) {
+      return generate_char_data(column, num_rows);
     }
     IntGenerator generator(1);
     return generator.generate(num_rows);
@@ -109,7 +190,7 @@ std::vector<GeneratedValue> ValueGenerator::generate_column_data(
 
     if (!is_integer_type(column_data_type)) {
       throw std::runtime_error("Foreign key column '" + column.get_column_name() +
-                               "' must use an integer type for v0.1 generation");
+                               "' must use an integer type for generation");
     }
 
     if (has_unique_constraint) {
@@ -146,6 +227,10 @@ std::vector<GeneratedValue> ValueGenerator::generate_column_data(
       return generator.generate(num_rows);
     }
 
+    if (column_data_type == DataType::CHAR) {
+      return generate_char_data(column, num_rows);
+    }
+
     if (is_decimal_type(column_data_type)) {
       DecimalGenerator generator(column.get_column_name());
       return generator.generate(num_rows);
@@ -158,7 +243,7 @@ std::vector<GeneratedValue> ValueGenerator::generate_column_data(
   }
 
   if (is_integer_type(column_data_type)) {
-    return generate_random_int_data(num_rows, random_engine);
+    return generate_int_data(num_rows);
   }
 
   if (is_text_type(column_data_type)) {
@@ -167,11 +252,27 @@ std::vector<GeneratedValue> ValueGenerator::generate_column_data(
   }
 
   if (is_decimal_type(column_data_type)) {
-    return generate_random_decimal_data(num_rows, random_engine);
+    return generate_decimal_data(num_rows);
   }
 
   if (column_data_type == DataType::BOOLEAN) {
-    return generate_random_boolean_data(num_rows, random_engine);
+    return generate_boolean_data(num_rows);
+  }
+
+  if (column_data_type == DataType::CHAR) {
+    return generate_char_data(column, num_rows);
+  }
+
+  if (column_data_type == DataType::DATE) {
+    return generate_date_data(num_rows);
+  }
+
+  if (column_data_type == DataType::TIME) {
+    return generate_time_data(num_rows);
+  }
+
+  if (column_data_type == DataType::DATETIME) {
+    return generate_date_time_data(num_rows);
   }
 
   throw std::runtime_error("Unsupported data type for column '" + column.get_column_name() + "'");

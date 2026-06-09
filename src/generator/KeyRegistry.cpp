@@ -8,7 +8,8 @@ namespace schemaforge {
 namespace {
 
 bool is_integer_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT;
+  return data_type == DataType::INT || data_type == DataType::BIGINT ||
+         data_type == DataType::SMALLINT;
 }
 
 bool is_single_integer_key(const TableConstraint& constraint) {

@@ -1,5 +1,7 @@
 #include "schemaforge/parser/ParserAdapter.h"
 
+#include <cctype>
+
 #include "SQLParser.h"
 
 namespace schemaforge {
@@ -86,6 +88,62 @@ Table* ParserAdapter::find_table_by_name(const std::string& name,
 }
 
 namespace {
+
+bool is_word_character(char character) {
+  return std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '_';
+}
+
+bool case_insensitive_char_match(char left, char right) {
+  return std::toupper(static_cast<unsigned char>(left)) ==
+         std::toupper(static_cast<unsigned char>(right));
+}
+
+bool case_insensitive_match_at(const std::string& value, std::size_t position,
+                               const std::string& target) {
+  if (position + target.size() > value.size()) {
+    return false;
+  }
+
+  for (std::size_t index = 0; index < target.size(); ++index) {
+    if (!case_insensitive_char_match(value[position + index], target[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string normalize_bare_char_type(const std::string& sql) {
+  std::string normalized;
+  normalized.reserve(sql.size());
+
+  for (std::size_t index = 0; index < sql.size();) {
+    const bool matches_char = case_insensitive_match_at(sql, index, "CHAR");
+    const bool starts_word = index == 0 || !is_word_character(sql[index - 1]);
+    const std::size_t after_char = index + 4;
+    const bool ends_word = after_char >= sql.size() || !is_word_character(sql[after_char]);
+
+    if (!matches_char || !starts_word || !ends_word) {
+      normalized += sql[index++];
+      continue;
+    }
+
+    std::size_t next = after_char;
+    while (next < sql.size() && std::isspace(static_cast<unsigned char>(sql[next])) != 0) {
+      next++;
+    }
+
+    if (next < sql.size() && sql[next] == '(') {
+      normalized.append(sql, index, after_char - index);
+      index = after_char;
+      continue;
+    }
+
+    normalized += "CHAR(1)";
+    index = after_char;
+  }
+
+  return normalized;
+}
 
 std::vector<Column*> primary_key_columns(const Table* table) {
   for (const auto& constraint : table->get_table_constraints()) {
@@ -329,8 +387,9 @@ Table ParserAdapter::convert_create_statement(const hsql::CreateStatement* creat
 std::vector<TablePtr> ParserAdapter::parse(const std::string& sql) {
   std::vector<TablePtr> tables;
 
+  const std::string normalized_sql = normalize_bare_char_type(sql);
   hsql::SQLParserResult result;
-  hsql::SQLParser::parse(sql, &result);
+  hsql::SQLParser::parse(normalized_sql, &result);
 
   auto statements = result.getStatements();
 
