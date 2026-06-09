@@ -26,6 +26,16 @@ bool has_constraint(const Table& table, const Column& column, ConstraintType con
   return false;
 }
 
+std::vector<Column*> key_columns_for_constraint(const Table& table, const Column& column,
+                                                ConstraintType constraint_type) {
+  for (const auto& constraint : table.get_table_constraints()) {
+    if (constraint.type == constraint_type && contains_column(constraint.columns, &column)) {
+      return constraint.columns;
+    }
+  }
+  return {};
+}
+
 const ForeignKey* find_foreign_key(const Table& table, const Column& column) {
   for (const auto& foreign_key : table.get_foreign_keys()) {
     if (contains_column(foreign_key.local_columns, &column)) {
@@ -159,6 +169,22 @@ std::vector<GeneratedValue> generate_date_time_data(int num_rows) {
   return data;
 }
 
+std::vector<GeneratedValue> generate_key_source_data(const Table& table, const Column& column,
+                                                     int num_rows,
+                                                     const KeyRegistry& key_registry) {
+  std::vector<GeneratedValue> data;
+  data.reserve(num_rows);
+  std::vector<Column*> key_columns =
+      key_columns_for_constraint(table, column, ConstraintType::PrimaryKey);
+
+  for (int row = 0; row < num_rows; ++row) {
+    data.push_back(key_registry.key_at_row(&table, key_columns, static_cast<std::size_t>(row))
+                       .front());
+  }
+
+  return data;
+}
+
 }  // namespace
 
 std::vector<GeneratedValue> ValueGenerator::generate_column_data(
@@ -168,15 +194,12 @@ std::vector<GeneratedValue> ValueGenerator::generate_column_data(
   const bool has_unique_constraint = has_constraint(table, column, ConstraintType::Unique);
   const bool has_primary_key_constraint = has_constraint(table, column, ConstraintType::PrimaryKey);
   if (has_primary_key_constraint) {
-    if (!is_integer_type(column_data_type) && column_data_type != DataType::CHAR) {
+    if (!is_integer_type(column_data_type) && !is_text_type(column_data_type) &&
+        column_data_type != DataType::CHAR) {
       throw std::runtime_error("Primary key column '" + column.get_column_name() +
-                               "' must use an integer or CHAR type for generation");
+                               "' must use an integer, text, or CHAR type for generation");
     }
-    if (column_data_type == DataType::CHAR) {
-      return generate_char_data(column, num_rows);
-    }
-    IntGenerator generator(1);
-    return generator.generate(num_rows);
+    return generate_key_source_data(table, column, num_rows, key_registry);
   }
 
   const ForeignKey* foreign_key = find_foreign_key(table, column);
@@ -188,9 +211,9 @@ std::vector<GeneratedValue> ValueGenerator::generate_column_data(
                                " referenced");
     }
 
-    if (!is_integer_type(column_data_type)) {
+    if (!is_integer_type(column_data_type) && !is_text_type(column_data_type)) {
       throw std::runtime_error("Foreign key column '" + column.get_column_name() +
-                               "' must use an integer type for generation");
+                               "' must use an integer or text type for generation");
     }
 
     if (has_unique_constraint) {

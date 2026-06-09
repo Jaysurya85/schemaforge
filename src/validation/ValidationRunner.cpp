@@ -40,6 +40,10 @@ bool is_char_type(DataType data_type) {
   return data_type == DataType::CHAR;
 }
 
+bool is_text_type(DataType data_type) {
+  return data_type == DataType::TEXT || data_type == DataType::VARCHAR;
+}
+
 std::string uppercase(std::string value) {
   std::ranges::transform(value, value.begin(), [](unsigned char character) {
     return static_cast<char>(std::toupper(character));
@@ -531,6 +535,17 @@ void check_unsupported_generation_type(const std::vector<TablePtr>& tables,
   }
 }
 
+void check_composite_primary_key_unsupported(const std::vector<TablePtr>& tables,
+                                             ValidationResult& validation_result) {
+  for (const auto& table_ptr : tables) {
+    for (const auto& constraint : table_ptr->get_table_constraints()) {
+      if (constraint.type == ConstraintType::PrimaryKey && constraint.columns.size() > 1) {
+        validation_result.errors.push_back("Composite primary keys are not supported yet");
+      }
+    }
+  }
+}
+
 void check_unsupported_pk_fk_generation_type(const std::vector<TablePtr>& tables,
                                              ValidationResult& validation_result) {
   for (const auto& table_ptr : tables) {
@@ -540,12 +555,13 @@ void check_unsupported_pk_fk_generation_type(const std::vector<TablePtr>& tables
       }
       for (const Column* column : constraint.columns) {
         if (column != nullptr && !is_integer_type(column->get_column_type().data_type) &&
+            !is_text_type(column->get_column_type().data_type) &&
             !is_char_type(column->get_column_type().data_type)) {
           validation_result.errors.push_back("Primary key column '" +
                                              table_ptr->get_table_name() + "." +
                                              column->get_column_name() +
-                                             "' must use INT, BIGINT, SMALLINT, or CHAR for "
-                                             "generation");
+                                             "' must use INT, BIGINT, SMALLINT, TEXT, VARCHAR, or "
+                                             "CHAR for generation");
         }
       }
     }
@@ -553,11 +569,13 @@ void check_unsupported_pk_fk_generation_type(const std::vector<TablePtr>& tables
     for (const auto& foreign_key_spec : table_ptr->get_foreign_key_specs()) {
       for (const auto& local_column_name : foreign_key_spec.local_columns) {
         const Column* local_column = find_column(table_ptr.get(), local_column_name);
-        if (local_column != nullptr && !is_integer_type(local_column->get_column_type().data_type)) {
+        if (local_column != nullptr && !is_integer_type(local_column->get_column_type().data_type) &&
+            !is_text_type(local_column->get_column_type().data_type)) {
           validation_result.errors.push_back("Foreign key column '" +
                                              table_ptr->get_table_name() + "." +
                                              local_column->get_column_name() +
-                                             "' must use INT, BIGINT, or SMALLINT for generation");
+                                             "' must use INT, BIGINT, SMALLINT, TEXT, or VARCHAR "
+                                             "for generation");
         }
       }
     }
@@ -743,6 +761,7 @@ ValidationResult ValidationRunner::validate_schema(const std::vector<TablePtr>& 
       check_cycle_detection,
       check_self_reference_unsupported,
       check_unsupported_generation_type,
+      check_composite_primary_key_unsupported,
       check_unsupported_pk_fk_generation_type,
   };
 

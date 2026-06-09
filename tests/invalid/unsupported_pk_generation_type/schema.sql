@@ -1,3 +1,3 @@
 CREATE TABLE users (
-  id TEXT PRIMARY KEY
+  born_on DATE PRIMARY KEY
 );

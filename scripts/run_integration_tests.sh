@@ -440,6 +440,84 @@ EOF
   fi
 }
 
+run_key_registry_pattern_sources() {
+  local name="unit/key_registry_pattern_sources"
+  local source_file="${TMP_DIR}/key_registry_pattern_sources.cpp"
+  local binary_file="${TMP_DIR}/key_registry_pattern_sources"
+  local log_file="${TMP_DIR}/key_registry_pattern_sources.log"
+
+  cat >"${source_file}" <<'EOF'
+#include <iostream>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+#include "schemaforge/generator/KeyRegistry.h"
+#include "schemaforge/schema/Column.h"
+#include "schemaforge/schema/Table.h"
+
+std::string text_value(const schemaforge::GeneratedValue& value) {
+  return value.visit([](const auto& typed_value) -> std::string {
+    using ValueType = std::decay_t<decltype(typed_value)>;
+    if constexpr (std::is_same_v<ValueType, std::string>) {
+      return typed_value;
+    }
+    return "<not text>";
+  });
+}
+
+int main() {
+  using namespace schemaforge;
+
+  std::vector<ColumnPtr> columns;
+  columns.push_back(std::make_unique<Column>("email", ColumnType{.data_type = DataType::TEXT}));
+  const Column* email = columns.front().get();
+
+  std::vector<Column*> primary_columns{columns.front().get()};
+  std::vector<TableConstraint> constraints{
+      TableConstraint(ConstraintType::PrimaryKey, primary_columns)};
+
+  Table table("users", std::move(columns), constraints, std::vector<ForeignKeySpec>{},
+              std::vector<ForeignKey>{});
+
+  KeyRegistry registry;
+  registry.register_pattern(&table, primary_columns, KeyRegistry::PatternKeyKind::Email, "users",
+                            0, 2);
+  const auto key = registry.key_at_row(&table, primary_columns, 1).front();
+  const std::string expected = "email_2@example.com";
+  const std::string actual = text_value(key);
+
+  if (actual != expected) {
+    std::cerr << "Expected: " << expected << '\n';
+    std::cerr << "Actual:   " << actual << '\n';
+    return 1;
+  }
+
+  (void)email;
+  return 0;
+}
+EOF
+
+  if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
+      "${source_file}" \
+      "${ROOT_DIR}/src/generator/KeyRegistry.cpp" \
+      "${ROOT_DIR}/src/config/GenerationConfig.cpp" \
+      "${ROOT_DIR}/src/schema/Column.cpp" \
+      "${ROOT_DIR}/src/schema/Table.cpp" \
+      -lyaml-cpp \
+      -o "${binary_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if "${binary_file}" >"${log_file}" 2>&1; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 require_artifact_contains() {
   local name="$1"
   local file="$2"
@@ -483,15 +561,37 @@ run_valid "valid/all_supported_types" "tests/valid/all_supported_types/schema.sq
 run_valid "valid/char_primary_key" "tests/valid/char_primary_key/schema.sql"
 run_valid "valid/char_unique_within_capacity" "tests/valid/char_unique_within_capacity/schema.sql" --rows flags=26
 run_valid "valid/char_cycle" "tests/valid/char_cycle/schema.sql" --rows flags=28
+run_valid "valid/text_primary_key_email" "tests/valid/text_primary_key_email/schema.sql"
+run_valid "valid/text_primary_key_table_key" "tests/valid/text_primary_key_table_key/schema.sql"
+run_valid "valid/varchar_primary_key" "tests/valid/varchar_primary_key/schema.sql"
+run_valid "valid/text_fk_email" "tests/valid/text_fk_email/schema.sql"
+run_valid "valid/text_fk_table_key" "tests/valid/text_fk_table_key/schema.sql"
+run_valid "valid/varchar_fk" "tests/valid/varchar_fk/schema.sql"
+run_valid "valid/unique_text_fk_within_capacity" "tests/valid/unique_text_fk_within_capacity/schema.sql"
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
 run_sqlite_disabled
 run_sql_literal_formatting
+run_key_registry_pattern_sources
 require_artifact_contains "valid/all_supported_types_output" "${ARTIFACT_DIR}/valid_all_supported_types.sql" \
   "VALUES (1, 1, 1, 'title_1', 'slug_1', 'A', 'AA', 10.50, 10.50, 10.50, 10.50, true, '2026-01-01', '2026-01-01 00:00:00', '00:00:01');"
 require_artifact_contains "valid/char_primary_key_output" "${ARTIFACT_DIR}/valid_char_primary_key.sql" \
   "VALUES ('AA', 'name_1');"
 require_artifact_contains "valid/char_cycle_output" "${ARTIFACT_DIR}/valid_char_cycle.sql" \
   "VALUES (27, 'A');"
+require_artifact_contains "valid/text_primary_key_email_output" "${ARTIFACT_DIR}/valid_text_primary_key_email.sql" \
+  "VALUES ('email_1@example.com', 'name_1');"
+require_artifact_contains "valid/text_primary_key_table_key_output" "${ARTIFACT_DIR}/valid_text_primary_key_table_key.sql" \
+  "VALUES ('users_key_1', 'name_1');"
+require_artifact_contains "valid/varchar_primary_key_output" "${ARTIFACT_DIR}/valid_varchar_primary_key.sql" \
+  "VALUES ('products_key_1', 'name_1');"
+require_artifact_contains "valid/text_fk_email_output" "${ARTIFACT_DIR}/valid_text_fk_email.sql" \
+  "VALUES (1, 'email_8@example.com');"
+require_artifact_contains "valid/text_fk_table_key_output" "${ARTIFACT_DIR}/valid_text_fk_table_key.sql" \
+  "VALUES (1, 'users_key_8');"
+require_artifact_contains "valid/varchar_fk_output" "${ARTIFACT_DIR}/valid_varchar_fk.sql" \
+  "VALUES (1, 'products_key_8');"
+require_artifact_contains "valid/unique_text_fk_within_capacity_output" "${ARTIFACT_DIR}/valid_unique_text_fk_within_capacity.sql" \
+  "VALUES (1, 'email_1@example.com');"
 
 run_invalid "invalid/missing_fk_table" "tests/invalid/missing_fk_table/schema.sql" "Referenced table 'users' not found"
 run_invalid "invalid/missing_fk_column" "tests/invalid/missing_fk_column/schema.sql" "Referenced column 'user_id' not found"
@@ -505,13 +605,16 @@ run_invalid "invalid/fk_type_mismatch" "tests/invalid/fk_type_mismatch/schema.sq
 run_invalid "invalid/fk_references_non_unique" "tests/invalid/fk_references_non_unique/schema.sql" "must reference a PRIMARY KEY or UNIQUE constraint"
 run_invalid "invalid/cycle" "tests/invalid/cycle/schema.sql" "Cycle detected"
 run_invalid "invalid/self_reference" "tests/invalid/self_reference/schema.sql" "Self-referencing foreign key"
-run_invalid "invalid/unsupported_pk_generation_type" "tests/invalid/unsupported_pk_generation_type/schema.sql" "Primary key column 'users.id' must use INT, BIGINT, SMALLINT, or CHAR for generation"
-run_invalid "invalid/unsupported_fk_generation_type" "tests/invalid/unsupported_fk_generation_type/schema.sql" "Foreign key column 'orders.user_id' must use INT, BIGINT, or SMALLINT for generation"
+run_invalid "invalid/unsupported_pk_generation_type" "tests/invalid/unsupported_pk_generation_type/schema.sql" "Primary key column 'users.born_on' must use INT, BIGINT, SMALLINT, TEXT, VARCHAR, or CHAR for generation"
+run_invalid "invalid/composite_primary_key" "tests/invalid/composite_primary_key/schema.sql" "Composite primary keys are not supported yet"
+run_invalid "invalid/unsupported_fk_generation_type" "tests/invalid/unsupported_fk_generation_type/schema.sql" "Foreign key column 'orders.user_born_on' must use INT, BIGINT, SMALLINT, TEXT, or VARCHAR for generation"
 run_valid "valid/date_generation" "tests/invalid/unsupported_date/schema.sql"
 run_invalid "invalid/unique_boolean_too_many" "tests/invalid/unique_boolean_too_many/schema.sql" "UNIQUE BOOLEAN"
 run_invalid "invalid/unique_char_too_many" "tests/invalid/unique_char_too_many/schema.sql" "Column users.code is UNIQUE CHAR(1) and can only produce 26 distinct values." --rows users=30
 run_invalid "invalid/unsupported_json" "tests/invalid/unsupported_json/schema.sql" "Unsupported generation type JSON for column users.metadata"
+run_invalid "invalid/unsupported_char_fk" "tests/invalid/unsupported_char_fk/schema.sql" "Foreign key column 'users.country_code' must use INT, BIGINT, SMALLINT, TEXT, or VARCHAR for generation"
 run_invalid "invalid/unique_fk_too_many_children" "tests/invalid/unique_fk_too_many_children/schema.sql" "UNIQUE foreign key" --rows orders=25
+run_invalid "invalid/unique_text_fk_too_many_children" "tests/invalid/unique_text_fk_too_many_children/schema.sql" "UNIQUE foreign key" --rows orders=25
 run_invalid "invalid/zero_parent_rows_for_fk" "tests/invalid/zero_parent_rows_for_fk/schema.sql" "references table 'users', but that table has 0 rows" --rows users=0 --rows orders=5
 run_invalid "invalid/multiple_errors" "tests/invalid/multiple_errors/schema.sql" "Duplicate column name 'users.id'"
 run_config_unknown_table

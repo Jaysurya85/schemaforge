@@ -1,6 +1,8 @@
 #pragma once
 #include <cstddef>
+#include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "schemaforge/config/GenerationConfig.h"
@@ -12,11 +14,28 @@
 namespace schemaforge {
 
 class KeyRegistry {
+ public:
+  enum class PatternKeyKind {
+    TableKey,
+    ColumnKey,
+    Email,
+    Char
+  };
+
  private:
   struct IntRangeKeySource {
     int start;
     int count;
   };
+
+  struct PatternKeySource {
+    PatternKeyKind kind;
+    std::string prefix;
+    int length;
+    int count;
+  };
+
+  using KeySource = std::variant<IntRangeKeySource, PatternKeySource>;
 
   struct KeyRef {
     const Table* table;
@@ -29,14 +48,17 @@ class KeyRegistry {
     std::size_t operator()(const KeyRef& key) const;
   };
 
-  std::unordered_map<KeyRef, IntRangeKeySource, KeyRefHash> int_range_sources;
+  std::unordered_map<KeyRef, KeySource, KeyRefHash> key_sources;
   static KeyRef make_key(const Table* table, const std::vector<Column*>& columns);
+  static GeneratedValue value_at_row(const PatternKeySource& source, std::size_t row_index);
 
  public:
   KeyRegistry() = default;
 
   void register_int_range(const Table* table, const std::vector<Column*>& columns, int start,
                           int count);
+  void register_pattern(const Table* table, const std::vector<Column*>& columns,
+                        PatternKeyKind kind, std::string prefix, int length, int count);
 
   [[nodiscard]] std::vector<GeneratedValue> random_key(const Table* table,
                                                        const std::vector<Column*>& columns,

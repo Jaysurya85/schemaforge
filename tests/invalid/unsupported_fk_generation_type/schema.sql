@@ -1,9 +1,10 @@
 CREATE TABLE users (
-  id INT PRIMARY KEY
+  id INT PRIMARY KEY,
+  born_on DATE UNIQUE
 );
 
 CREATE TABLE orders (
   id INT PRIMARY KEY,
-  user_id TEXT,
-  FOREIGN KEY(user_id) REFERENCES users(id)
+  user_born_on DATE,
+  FOREIGN KEY(user_born_on) REFERENCES users(born_on)
 );
