@@ -3,25 +3,16 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <cstdint>
 #include <functional>
-#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 
+#include "schemaforge/domain/ColumnDomainResolver.h"
+
 namespace schemaforge {
 
 namespace {
-
-bool is_integer_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT ||
-         data_type == DataType::SMALLINT;
-}
-
-bool is_text_type(DataType data_type) {
-  return data_type == DataType::TEXT || data_type == DataType::VARCHAR;
-}
 
 bool is_email_column(std::string column_name) {
   std::ranges::transform(column_name, column_name.begin(), [](unsigned char character) {
@@ -29,64 +20,6 @@ bool is_email_column(std::string column_name) {
   });
   return column_name.find("email") != std::string::npos && !column_name.ends_with("_id") &&
          !column_name.ends_with("id");
-}
-
-struct EffectiveCheckConstraint {
-  std::optional<double> min_value;
-  std::optional<double> max_value;
-  std::vector<GeneratedValue> allowed_values;
-};
-
-EffectiveCheckConstraint effective_check_for_column(const Table* table, const Column* column) {
-  EffectiveCheckConstraint effective;
-  for (const auto& check : table->get_check_constraints()) {
-    if (check.column != column) {
-      continue;
-    }
-    if (check.type == CheckConstraintType::AllowedValues) {
-      effective.allowed_values = check.allowed_values;
-      continue;
-    }
-    if (check.type == CheckConstraintType::Range) {
-      if (check.min_value.has_value()) {
-        effective.min_value =
-            effective.min_value.has_value()
-                ? std::max(effective.min_value.value(), check.min_value.value())
-                : check.min_value.value();
-      }
-      if (check.max_value.has_value()) {
-        effective.max_value =
-            effective.max_value.has_value()
-                ? std::min(effective.max_value.value(), check.max_value.value())
-                : check.max_value.value();
-      }
-    }
-  }
-  return effective;
-}
-
-GeneratedValue coerce_allowed_value(const GeneratedValue& value, DataType data_type) {
-  return value.visit([data_type, &value](const auto& typed_value) -> GeneratedValue {
-    using ValueType = std::decay_t<decltype(typed_value)>;
-    if constexpr (std::is_same_v<ValueType, double>) {
-      if (is_integer_type(data_type)) {
-        return GeneratedValue::integer(static_cast<std::int64_t>(typed_value));
-      }
-      return GeneratedValue::numeric(typed_value);
-    } else if constexpr (std::is_same_v<ValueType, std::string>) {
-      return GeneratedValue::text(typed_value);
-    } else {
-      return value;
-    }
-  });
-}
-
-int char_length(const Column* column) {
-  const int64_t parsed_length = column->get_column_type().length;
-  if (parsed_length <= 0) {
-    return 1;
-  }
-  return static_cast<int>(parsed_length);
 }
 
 std::string char_value_at(int row_index, int length) {
@@ -258,19 +191,20 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
 
       const Column* column = constraint.columns.front();
       const DataType data_type = column->get_column_type().data_type;
-      const EffectiveCheckConstraint effective_check = effective_check_for_column(table, column);
+      const EffectiveCheckConstraint effective_check =
+          ColumnDomainResolver::effective_check_for_column(table, column);
       if (!effective_check.allowed_values.empty()) {
         std::vector<GeneratedValue> values;
         values.reserve(effective_check.allowed_values.size());
         for (const auto& value : effective_check.allowed_values) {
-          values.push_back(coerce_allowed_value(value, data_type));
+          values.push_back(ColumnDomainResolver::coerce_allowed_value(value, data_type));
         }
         key_registry.key_sources[make_key(table, constraint.columns)] =
             AllowedValuesKeySource{.values = std::move(values)};
         continue;
       }
 
-      if (is_integer_type(data_type)) {
+      if (ColumnDomainResolver::is_integer_type(data_type)) {
         const int start =
             static_cast<int>(std::ceil(effective_check.min_value.value_or(1.0)));
         const int end =
@@ -280,7 +214,7 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
         continue;
       }
 
-      if (is_text_type(data_type)) {
+      if (ColumnDomainResolver::is_text_type(data_type)) {
         const bool email_column = is_email_column(column->get_column_name());
         const PatternKeyKind kind =
             email_column ? PatternKeyKind::Email
@@ -294,7 +228,8 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
 
       if (data_type == DataType::CHAR) {
         key_registry.register_pattern(table, constraint.columns, PatternKeyKind::Char,
-                                      table->get_table_name(), char_length(column), row_count);
+                                      table->get_table_name(),
+                                      ColumnDomainResolver::char_length(column), row_count);
       }
     }
   }
