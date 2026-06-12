@@ -3,19 +3,6 @@
 SchemaForge parses a SQL schema, validates table relationships, generates deterministic sample
 data, writes SQL `INSERT` statements, and validates the result in SQLite.
 
-## v1 Features
-
-- Parses SQL `CREATE TABLE` schemas and orders tables by foreign-key dependencies.
-- Generates deterministic SQL `INSERT` data with seed and row-count configuration.
-- Writes an editable YAML config for schema path, output path, benchmark path, SQLite validation,
-  default rows, and per-table rows.
-- Validates schema, config, and generation feasibility with aggregated errors instead of stopping
-  at the first issue.
-- Checks duplicate names, PK/UNIQUE/FK correctness, cycles, self-references, unsupported types,
-  missing schema/config targets, and row-capacity limits.
-- Optionally validates generated SQL in SQLite and writes benchmark metrics.
-- Includes a complex marketplace test fixture for multi-table generation.
-
 ## Clone
 
 Using SSH:
@@ -32,6 +19,20 @@ git submodule update --init --recursive
 ```
 
 ## Build and Run
+
+Install the YAML C++ development package before building on a fresh system.
+
+Ubuntu:
+
+```bash
+sudo apt install libyaml-cpp-dev
+```
+
+Arch:
+
+```bash
+sudo pacman -S yaml-cpp
+```
 
 ```bash
 make build
@@ -68,5 +69,52 @@ validation time is reported separately.
 ```bash
 scripts/run_integration_tests.sh
 ```
+
+## Supported Features
+
+- Parses SQL `CREATE TABLE` schemas.
+- Supports `PRIMARY KEY`, `UNIQUE`, and `FOREIGN KEY` constraints.
+- Supports single-column primary keys.
+- Supports single-column and composite unique constraints.
+- Supports foreign keys that reference primary-key or unique columns.
+- Orders tables by foreign-key dependencies before generating rows.
+- Generates deterministic SQL `INSERT` data from a seed.
+- Supports configurable default row counts and per-table row counts.
+- Writes an editable YAML config for schema path, output path, benchmark path, SQLite validation,
+  default rows, and per-table rows.
+- Generates values for `INT`, `SMALLINT`, `BIGINT`, `TEXT`, `VARCHAR`, `CHAR`, `DECIMAL`,
+  `FLOAT`, `DOUBLE`, `REAL`, `BOOLEAN`, `DATE`, `DATETIME`, and `TIME`.
+- Supports simple `CHECK` constraints for numeric ranges, `BETWEEN`, numeric `IN`, and text `IN`.
+- Optionally validates generated SQL in SQLite.
+- Writes benchmark metrics for generated rows, generation time, throughput, validation time, and
+  total command time.
+- Includes a complex marketplace test fixture for multi-table generation.
+
+## Validation Coverage
+
+SchemaForge validates schema, config, and generation feasibility with aggregated errors instead of
+stopping at the first issue.
+
+- Missing schema paths and missing schema files.
+- Known unsupported column types, including `JSON`, `UUID`, `ARRAY`, `BLOB`, `ENUM`, and `INET`.
+- Duplicate table names and duplicate column names.
+- Primary-key constraints that reference missing columns.
+- Unique constraints that reference missing columns.
+- Foreign keys with missing local columns, missing referenced tables, or missing referenced columns.
+- Foreign keys with mismatched local and referenced column counts.
+- Foreign keys with mismatched local and referenced column types.
+- Foreign keys that do not reference a `PRIMARY KEY` or `UNIQUE` constraint.
+- Dependency cycles between tables.
+- Self-referencing foreign keys, which are not supported yet.
+- Unsupported generation types.
+- Unsupported `CHECK` constraint expressions.
+- Composite primary keys, which are not supported yet.
+- Primary-key generation types outside `INT`, `BIGINT`, `SMALLINT`, `TEXT`, `VARCHAR`, and `CHAR`.
+- Foreign-key generation types outside `INT`, `BIGINT`, `SMALLINT`, `TEXT`, and `VARCHAR`.
+- YAML config entries that reference unknown tables.
+- Child tables that request rows while a referenced parent table has 0 rows.
+- Row-count requests that exceed finite unique capacities, including `BOOLEAN`, `CHAR(n)`, limited
+  `CHECK` domains, composite unique domains, and unique foreign keys.
+
 
 Valid test outputs and benchmark reports are written to `tests/artifacts/`.

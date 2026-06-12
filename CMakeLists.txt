@@ -21,6 +21,7 @@ add_executable(schemaforge
     src/validation/ValidationRunner.cpp
     src/graph/DependencyGraph.cpp
     src/config/GenerationConfig.cpp
+    src/domain/ColumnDomainResolver.cpp
     src/generator/GenerationPlan.cpp
     src/generator/KeyRegistry.cpp
     src/generator/ValueGenerator.cpp

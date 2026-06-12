@@ -502,6 +502,7 @@ EOF
   if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
       "${source_file}" \
       "${ROOT_DIR}/src/generator/KeyRegistry.cpp" \
+      "${ROOT_DIR}/src/domain/ColumnDomainResolver.cpp" \
       "${ROOT_DIR}/src/config/GenerationConfig.cpp" \
       "${ROOT_DIR}/src/schema/Column.cpp" \
       "${ROOT_DIR}/src/schema/Table.cpp" \

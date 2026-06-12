@@ -1,10 +1,11 @@
 #include "schemaforge/validation/CapacityAnalyzer.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
+
+#include "schemaforge/domain/ColumnDomainResolver.h"
 
 namespace schemaforge {
 
@@ -23,25 +24,6 @@ bool CapacityAnalyzer::has_constraint(const Table* table, const Column* column,
   return false;
 }
 
-int char_length(const Column* column) {
-  const int64_t parsed_length = column->get_column_type().length;
-  if (parsed_length <= 0) {
-    return 1;
-  }
-  return static_cast<int>(parsed_length);
-}
-
-int char_capacity(int length) {
-  int capacity = 1;
-  for (int index = 0; index < length; ++index) {
-    if (capacity > std::numeric_limits<int>::max() / 26) {
-      return std::numeric_limits<int>::max();
-    }
-    capacity *= 26;
-  }
-  return capacity;
-}
-
 std::optional<RowCapacityLimit> check_capacity_limit(const Table* table, const Column* column) {
   auto has_local_constraint = [table, column](ConstraintType type) {
     for (const auto& constraint : table->get_table_constraints()) {
@@ -58,34 +40,25 @@ std::optional<RowCapacityLimit> check_capacity_limit(const Table* table, const C
     return std::nullopt;
   }
 
-  for (const auto& check : table->get_check_constraints()) {
-    if (check.column != column) {
-      continue;
-    }
+  GenerationConfig config;
+  const ColumnDomain domain = ColumnDomainResolver::domain_for_column(table, column, config, 0);
+  const std::string qualified_column = table->get_table_name() + "." + column->get_column_name();
+  if (!domain.check.allowed_values.empty() && domain.finite_capacity.has_value()) {
+    return RowCapacityLimit{.max_rows = domain.finite_capacity.value(),
+                            .reason = "Column " + qualified_column +
+                                      " is UNIQUE CHECK and can only produce " +
+                                      std::to_string(domain.finite_capacity.value()) +
+                                      " distinct values."};
+  }
 
-    const std::string qualified_column =
-        table->get_table_name() + "." + column->get_column_name();
-    if (check.type == CheckConstraintType::AllowedValues) {
-      return RowCapacityLimit{.max_rows = static_cast<int>(check.allowed_values.size()),
-                              .reason = "Column " + qualified_column +
-                                        " is UNIQUE CHECK and can only produce " +
-                                        std::to_string(check.allowed_values.size()) +
-                                        " distinct values."};
-    }
-
-    if (check.type == CheckConstraintType::Range &&
-        (column->get_column_type().data_type == DataType::INT ||
-         column->get_column_type().data_type == DataType::BIGINT ||
-         column->get_column_type().data_type == DataType::SMALLINT) &&
-        check.min_value.has_value() && check.max_value.has_value()) {
-      const int min_value = static_cast<int>(std::ceil(check.min_value.value()));
-      const int max_value = static_cast<int>(std::floor(check.max_value.value()));
-      const int capacity = std::max(0, max_value - min_value + 1);
-      return RowCapacityLimit{.max_rows = capacity,
-                              .reason = "Column " + qualified_column +
-                                        " is UNIQUE CHECK and can only produce " +
-                                        std::to_string(capacity) + " distinct values."};
-    }
+  if (ColumnDomainResolver::is_integer_type(column->get_column_type().data_type) &&
+      domain.check.min_value.has_value() && domain.check.max_value.has_value() &&
+      domain.finite_capacity.has_value()) {
+    return RowCapacityLimit{.max_rows = domain.finite_capacity.value(),
+                            .reason = "Column " + qualified_column +
+                                      " is UNIQUE CHECK and can only produce " +
+                                      std::to_string(domain.finite_capacity.value()) +
+                                      " distinct values."};
   }
 
   return std::nullopt;
@@ -108,30 +81,6 @@ int configured_rows_for_table(const GenerationConfig& config, const Table* table
   return config.get_row_count(table->get_table_name());
 }
 
-std::optional<int> check_domain_size(const Table* table, const Column* column) {
-  for (const auto& check : table->get_check_constraints()) {
-    if (check.column != column) {
-      continue;
-    }
-
-    if (check.type == CheckConstraintType::AllowedValues) {
-      return static_cast<int>(check.allowed_values.size());
-    }
-
-    if (check.type == CheckConstraintType::Range &&
-        (column->get_column_type().data_type == DataType::INT ||
-         column->get_column_type().data_type == DataType::BIGINT ||
-         column->get_column_type().data_type == DataType::SMALLINT) &&
-        check.min_value.has_value() && check.max_value.has_value()) {
-      const int min_value = static_cast<int>(std::ceil(check.min_value.value()));
-      const int max_value = static_cast<int>(std::floor(check.max_value.value()));
-      return std::max(0, max_value - min_value + 1);
-    }
-  }
-
-  return std::nullopt;
-}
-
 int composite_column_domain_size(const Table* table, const Column* column,
                                  const GenerationConfig& config, int requested_rows) {
   if (const ForeignKey* foreign_key = find_single_column_foreign_key(table, column);
@@ -139,16 +88,10 @@ int composite_column_domain_size(const Table* table, const Column* column,
     return configured_rows_for_table(config, foreign_key->referenced_table);
   }
 
-  if (const auto check_size = check_domain_size(table, column); check_size.has_value()) {
-    return check_size.value();
-  }
-
-  if (column->get_column_type().data_type == DataType::BOOLEAN) {
-    return 2;
-  }
-
-  if (column->get_column_type().data_type == DataType::CHAR) {
-    return char_capacity(char_length(column));
+  const ColumnDomain domain =
+      ColumnDomainResolver::domain_for_column(table, column, config, requested_rows);
+  if (domain.finite_capacity.has_value()) {
+    return domain.finite_capacity.value();
   }
 
   return requested_rows;
@@ -219,8 +162,8 @@ std::optional<RowCapacityLimit> CapacityAnalyzer::column_capacity_limit(const Ta
     const bool is_unique = has_constraint(table, column, ConstraintType::Unique);
     const bool is_primary_key = has_constraint(table, column, ConstraintType::PrimaryKey);
     if (is_unique || is_primary_key) {
-      const int length = char_length(column);
-      const int capacity = char_capacity(length);
+      const int length = ColumnDomainResolver::char_length(column);
+      const int capacity = ColumnDomainResolver::char_capacity(length);
       const std::string qualified_column_name =
           table->get_table_name() + "." + column->get_column_name();
       const std::string constraint_name = is_primary_key ? "PRIMARY KEY" : "UNIQUE";

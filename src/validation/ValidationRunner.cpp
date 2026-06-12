@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "schemaforge/domain/ColumnDomainResolver.h"
 #include "schemaforge/validation/SQLiteValidator.h"
 
 namespace schemaforge {
@@ -29,19 +30,6 @@ bool is_supported_generation_type(DataType data_type) {
          data_type == DataType::DOUBLE || data_type == DataType::REAL ||
          data_type == DataType::BOOLEAN || data_type == DataType::DATE ||
          data_type == DataType::DATETIME || data_type == DataType::TIME;
-}
-
-bool is_integer_type(DataType data_type) {
-  return data_type == DataType::INT || data_type == DataType::BIGINT ||
-         data_type == DataType::SMALLINT;
-}
-
-bool is_char_type(DataType data_type) {
-  return data_type == DataType::CHAR;
-}
-
-bool is_text_type(DataType data_type) {
-  return data_type == DataType::TEXT || data_type == DataType::VARCHAR;
 }
 
 std::string uppercase(std::string value) {
@@ -569,9 +557,10 @@ void check_unsupported_pk_fk_generation_type(const std::vector<TablePtr>& tables
         continue;
       }
       for (const Column* column : constraint.columns) {
-        if (column != nullptr && !is_integer_type(column->get_column_type().data_type) &&
-            !is_text_type(column->get_column_type().data_type) &&
-            !is_char_type(column->get_column_type().data_type)) {
+        if (column != nullptr &&
+            !ColumnDomainResolver::is_integer_type(column->get_column_type().data_type) &&
+            !ColumnDomainResolver::is_text_type(column->get_column_type().data_type) &&
+            column->get_column_type().data_type != DataType::CHAR) {
           validation_result.errors.push_back("Primary key column '" +
                                              table_ptr->get_table_name() + "." +
                                              column->get_column_name() +
@@ -584,8 +573,9 @@ void check_unsupported_pk_fk_generation_type(const std::vector<TablePtr>& tables
     for (const auto& foreign_key_spec : table_ptr->get_foreign_key_specs()) {
       for (const auto& local_column_name : foreign_key_spec.local_columns) {
         const Column* local_column = find_column(table_ptr.get(), local_column_name);
-        if (local_column != nullptr && !is_integer_type(local_column->get_column_type().data_type) &&
-            !is_text_type(local_column->get_column_type().data_type)) {
+        if (local_column != nullptr &&
+            !ColumnDomainResolver::is_integer_type(local_column->get_column_type().data_type) &&
+            !ColumnDomainResolver::is_text_type(local_column->get_column_type().data_type)) {
           validation_result.errors.push_back("Foreign key column '" +
                                              table_ptr->get_table_name() + "." +
                                              local_column->get_column_name() +
