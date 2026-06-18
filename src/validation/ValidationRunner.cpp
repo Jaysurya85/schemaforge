@@ -538,17 +538,6 @@ void check_unsupported_check_constraints(const std::vector<TablePtr>& tables,
   }
 }
 
-void check_composite_primary_key_unsupported(const std::vector<TablePtr>& tables,
-                                             ValidationResult& validation_result) {
-  for (const auto& table_ptr : tables) {
-    for (const auto& constraint : table_ptr->get_table_constraints()) {
-      if (constraint.type == ConstraintType::PrimaryKey && constraint.columns.size() > 1) {
-        validation_result.errors.push_back("Composite primary keys are not supported yet");
-      }
-    }
-  }
-}
-
 void check_unsupported_pk_fk_generation_type(const std::vector<TablePtr>& tables,
                                              ValidationResult& validation_result) {
   for (const auto& table_ptr : tables) {
@@ -708,16 +697,17 @@ void check_unique_check_capacity(const std::vector<TablePtr>&, const GenerationC
   }
 }
 
-void check_composite_unique_capacity(const std::vector<TablePtr>&, const GenerationConfig&,
-                                     const SchemaCapacityInfo& capacity_info,
-                                     ValidationResult& validation_result) {
+void check_composite_key_capacity(const std::vector<TablePtr>&, const GenerationConfig&,
+                                  const SchemaCapacityInfo& capacity_info,
+                                  ValidationResult& validation_result) {
   for (const auto& table_info : capacity_info.tables) {
     if (table_info.requested_rows <= table_info.max_rows) {
       continue;
     }
 
     const auto reason_it = std::ranges::find_if(table_info.reasons, [](const std::string& reason) {
-      return reason.find("Composite UNIQUE(") != std::string::npos;
+      return reason.find("Composite UNIQUE(") != std::string::npos ||
+             reason.find("Composite PRIMARY KEY(") != std::string::npos;
     });
     if (reason_it == table_info.reasons.end()) {
       continue;
@@ -812,7 +802,6 @@ ValidationResult ValidationRunner::validate_schema(const std::vector<TablePtr>& 
       check_self_reference_unsupported,
       check_unsupported_generation_type,
       check_unsupported_check_constraints,
-      check_composite_primary_key_unsupported,
       check_unsupported_pk_fk_generation_type,
   };
 
@@ -846,7 +835,7 @@ ValidationResult ValidationRunner::validate_generation(const std::vector<TablePt
       check_unique_boolean_capacity,
       check_char_capacity,
       check_unique_check_capacity,
-      check_composite_unique_capacity,
+      check_composite_key_capacity,
       check_unique_fk_capacity,
   };
 

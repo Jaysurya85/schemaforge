@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "schemaforge/domain/ColumnDomainResolver.h"
+#include "schemaforge/generator/TextGenerator.h"
 
 namespace schemaforge {
 
@@ -45,6 +46,16 @@ bool is_single_key_constraint(const TableConstraint& constraint) {
   return column != nullptr;
 }
 
+bool is_composite_primary_key_constraint(const TableConstraint& constraint) {
+  if (constraint.type != ConstraintType::PrimaryKey || constraint.columns.size() <= 1) {
+    return false;
+  }
+
+  return std::ranges::all_of(constraint.columns, [](const Column* column) {
+    return column != nullptr;
+  });
+}
+
 std::string key_name(const Table* table) {
   if (table == nullptr) {
     return "<null table>";
@@ -74,6 +85,84 @@ int integer_max_bound(const EffectiveCheckConstraint& check, double default_valu
     return static_cast<int>(std::floor(value));
   }
   return static_cast<int>(std::ceil(value)) - 1;
+}
+
+std::vector<GeneratedValue> generated_values_for_column(const Table* table, const Column* column,
+                                                        int row_count) {
+  const DataType data_type = column->get_column_type().data_type;
+  const EffectiveCheckConstraint effective_check =
+      ColumnDomainResolver::effective_check_for_column(table, column);
+
+  if (!effective_check.allowed_values.empty()) {
+    std::vector<GeneratedValue> values;
+    values.reserve(effective_check.allowed_values.size());
+    for (const auto& value : effective_check.allowed_values) {
+      values.push_back(ColumnDomainResolver::coerce_allowed_value(value, data_type));
+    }
+    return values;
+  }
+
+  if (ColumnDomainResolver::is_integer_type(data_type)) {
+    const int start = integer_min_bound(effective_check, 1.0);
+    const int end = integer_max_bound(effective_check, start + row_count - 1);
+    const int count = std::max(0, end - start + 1);
+    std::vector<GeneratedValue> values;
+    values.reserve(static_cast<std::size_t>(count));
+    for (int offset = 0; offset < count; ++offset) {
+      values.push_back(GeneratedValue::integer(start + offset));
+    }
+    return values;
+  }
+
+  if (ColumnDomainResolver::is_text_type(data_type)) {
+    TextGenerator generator(column->get_column_name());
+    return generator.generate(row_count);
+  }
+
+  if (data_type == DataType::CHAR) {
+    const int length = ColumnDomainResolver::char_length(column);
+    const int capacity = ColumnDomainResolver::char_capacity(length);
+    std::vector<GeneratedValue> values;
+    values.reserve(static_cast<std::size_t>(row_count));
+    for (int row = 0; row < row_count; ++row) {
+      values.push_back(GeneratedValue::text(char_value_at(row % capacity, length)));
+    }
+    return values;
+  }
+
+  return {};
+}
+
+std::vector<std::vector<GeneratedValue>> generate_tuple_values(const Table* table,
+                                                              const TableConstraint& constraint,
+                                                              int row_count) {
+  std::vector<std::vector<GeneratedValue>> domains;
+  domains.reserve(constraint.columns.size());
+  for (const Column* column : constraint.columns) {
+    auto values = generated_values_for_column(table, column, row_count);
+    if (values.empty()) {
+      return {};
+    }
+    domains.push_back(std::move(values));
+  }
+
+  std::vector<std::vector<GeneratedValue>> tuples;
+  tuples.reserve(static_cast<std::size_t>(row_count));
+  for (int row = 0; row < row_count; ++row) {
+    std::vector<GeneratedValue> tuple;
+    tuple.reserve(constraint.columns.size());
+    for (std::size_t column_index = 0; column_index < domains.size(); ++column_index) {
+      std::size_t divisor = 1;
+      for (std::size_t later = column_index + 1; later < domains.size(); ++later) {
+        divisor *= domains[later].size();
+      }
+      const std::size_t value_index =
+          (static_cast<std::size_t>(row) / divisor) % domains[column_index].size();
+      tuple.push_back(domains[column_index][value_index]);
+    }
+    tuples.push_back(std::move(tuple));
+  }
+  return tuples;
 }
 
 }  // namespace
@@ -155,13 +244,21 @@ std::vector<GeneratedValue> KeyRegistry::random_key(const Table* table,
           }
           const int offset = random_engine.next_int(0, source.count - 1);
           return {value_at_row(source, static_cast<std::size_t>(offset))};
-        } else {
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(source)>,
+                                            AllowedValuesKeySource>) {
           if (source.values.empty()) {
             throw std::runtime_error("Referenced key source for table '" + key_name(table) +
                                      "' has no values");
           }
           const int offset = random_engine.next_int(0, static_cast<int>(source.values.size()) - 1);
           return {source.values[static_cast<std::size_t>(offset)]};
+        } else {
+          if (source.values.empty()) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' has no values");
+          }
+          const int offset = random_engine.next_int(0, static_cast<int>(source.values.size()) - 1);
+          return source.values[static_cast<std::size_t>(offset)];
         }
       },
       key_source->second);
@@ -190,12 +287,19 @@ std::vector<GeneratedValue> KeyRegistry::key_at_row(const Table* table,
                                      "' does not have enough values");
           }
           return {value_at_row(source, row_index)};
-        } else {
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(source)>,
+                                            AllowedValuesKeySource>) {
           if (row_index >= source.values.size()) {
             throw std::runtime_error("Referenced key source for table '" + key_name(table) +
                                      "' does not have enough values");
           }
           return {source.values[row_index]};
+        } else {
+          if (row_index >= source.values.size()) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' does not have enough values");
+          }
+          return source.values[row_index];
         }
       },
       key_source->second);
@@ -209,6 +313,12 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
     const Table* table = table_ptr.get();
     const int row_count = config.get_row_count(table->get_table_name());
     for (const auto& constraint : table->get_table_constraints()) {
+      if (is_composite_primary_key_constraint(constraint)) {
+        key_registry.key_sources[make_key(table, constraint.columns)] =
+            TupleKeySource{.values = generate_tuple_values(table, constraint, row_count)};
+        continue;
+      }
+
       if (!is_single_key_constraint(constraint)) {
         continue;
       }

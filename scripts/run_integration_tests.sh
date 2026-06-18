@@ -502,6 +502,92 @@ EOF
   if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
       "${source_file}" \
       "${ROOT_DIR}/src/generator/KeyRegistry.cpp" \
+      "${ROOT_DIR}/src/generator/TextGenerator.cpp" \
+      "${ROOT_DIR}/src/domain/ColumnDomainResolver.cpp" \
+      "${ROOT_DIR}/src/config/GenerationConfig.cpp" \
+      "${ROOT_DIR}/src/schema/Column.cpp" \
+      "${ROOT_DIR}/src/schema/Table.cpp" \
+      -lyaml-cpp \
+      -o "${binary_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if "${binary_file}" >"${log_file}" 2>&1; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_key_registry_composite_primary_key() {
+  local name="unit/key_registry_composite_primary_key"
+  local source_file="${TMP_DIR}/key_registry_composite_primary_key.cpp"
+  local binary_file="${TMP_DIR}/key_registry_composite_primary_key"
+  local log_file="${TMP_DIR}/key_registry_composite_primary_key.log"
+
+  cat >"${source_file}" <<'EOF'
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+#include "schemaforge/config/GenerationConfig.h"
+#include "schemaforge/generator/GeneratedValue.h"
+#include "schemaforge/generator/KeyRegistry.h"
+#include "schemaforge/schema/Column.h"
+#include "schemaforge/schema/Table.h"
+
+std::int64_t integer_value(const schemaforge::GeneratedValue& value) {
+  return value.visit([](const auto& typed_value) -> std::int64_t {
+    using ValueType = std::decay_t<decltype(typed_value)>;
+    if constexpr (std::is_same_v<ValueType, std::int64_t>) {
+      return typed_value;
+    }
+    return -1;
+  });
+}
+
+int main() {
+  using namespace schemaforge;
+
+  std::vector<ColumnPtr> columns;
+  columns.push_back(std::make_unique<Column>("user_id", ColumnType{.data_type = DataType::INT}));
+  columns.push_back(std::make_unique<Column>("team_id", ColumnType{.data_type = DataType::INT}));
+  std::vector<Column*> primary_columns{columns[0].get(), columns[1].get()};
+  std::vector<TableConstraint> constraints{
+      TableConstraint(ConstraintType::PrimaryKey, primary_columns)};
+
+  auto table = std::make_unique<Table>("memberships", std::move(columns), constraints,
+                                       std::vector<ForeignKeySpec>{}, std::vector<ForeignKey>{});
+  std::vector<TablePtr> tables;
+  tables.push_back(std::move(table));
+
+  GenerationConfig config = GenerationConfig::make_default();
+  config.table_row_counts["memberships"] = 4;
+
+  const KeyRegistry registry = KeyRegistry::build_from_tables(tables, config);
+  const auto key = registry.key_at_row(tables.front().get(), primary_columns, 3);
+
+  if (key.size() != 2 || integer_value(key[0]) != 1 || integer_value(key[1]) != 4) {
+    std::cerr << "Expected composite key row 4 to be (1, 4)\n";
+    if (key.size() == 2) {
+      std::cerr << "Actual: (" << integer_value(key[0]) << ", " << integer_value(key[1])
+                << ")\n";
+    }
+    return 1;
+  }
+
+  return 0;
+}
+EOF
+
+  if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
+      "${source_file}" \
+      "${ROOT_DIR}/src/generator/KeyRegistry.cpp" \
+      "${ROOT_DIR}/src/generator/TextGenerator.cpp" \
       "${ROOT_DIR}/src/domain/ColumnDomainResolver.cpp" \
       "${ROOT_DIR}/src/config/GenerationConfig.cpp" \
       "${ROOT_DIR}/src/schema/Column.cpp" \
@@ -582,6 +668,8 @@ run_valid "valid/check_decimal_greater_equal" "tests/valid/check_decimal_greater
 run_valid "valid/check_decimal_less_than" "tests/valid/check_decimal_less_than/schema.sql"
 run_valid "valid/check_decimal_less_equal" "tests/valid/check_decimal_less_equal/schema.sql"
 run_valid "valid/unique_decimal_check" "tests/valid/unique_decimal_check/schema.sql"
+run_valid "valid/composite_primary_key" "tests/valid/composite_primary_key/schema.sql" --rows memberships=4
+run_valid "valid/composite_primary_key_text" "tests/valid/composite_primary_key_text/schema.sql"
 run_valid "valid/composite_unique_int" "tests/valid/composite_unique_int/schema.sql"
 run_valid "valid/composite_unique_text" "tests/valid/composite_unique_text/schema.sql"
 run_valid "valid/composite_unique_fk" "tests/valid/composite_unique_fk/schema.sql"
@@ -589,6 +677,7 @@ run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql"
 run_sqlite_disabled
 run_sql_literal_formatting
 run_key_registry_pattern_sources
+run_key_registry_composite_primary_key
 require_artifact_contains "valid/all_supported_types_output" "${ARTIFACT_DIR}/valid_all_supported_types.sql" \
   "VALUES (1, 1, 1, 'title_1', 'slug_1', 'A', 'AA', 10.50, 10.50, 10.50, 10.50, true, '2026-01-01', '2026-01-01 00:00:00', '00:00:01');"
 require_artifact_contains "valid/char_primary_key_output" "${ARTIFACT_DIR}/valid_char_primary_key.sql" \
@@ -637,6 +726,12 @@ require_artifact_contains "valid/check_decimal_less_equal_output" "${ARTIFACT_DI
   "VALUES (2, 10.50);"
 require_artifact_contains "valid/unique_decimal_check_output" "${ARTIFACT_DIR}/valid_unique_decimal_check.sql" \
   "VALUES (1, 0.51);"
+require_artifact_contains "valid/composite_primary_key_output_first" "${ARTIFACT_DIR}/valid_composite_primary_key.sql" \
+  "VALUES (1, 1);"
+require_artifact_contains "valid/composite_primary_key_output_nested" "${ARTIFACT_DIR}/valid_composite_primary_key.sql" \
+  "VALUES (2, 1);"
+require_artifact_contains "valid/composite_primary_key_text_output" "${ARTIFACT_DIR}/valid_composite_primary_key_text.sql" \
+  "VALUES ('namespace_1', 'slug_2');"
 require_artifact_contains "valid/composite_unique_int_output_first" "${ARTIFACT_DIR}/valid_composite_unique_int.sql" \
   "VALUES (1, 1, 1);"
 require_artifact_contains "valid/composite_unique_int_output_nested" "${ARTIFACT_DIR}/valid_composite_unique_int.sql" \
@@ -661,7 +756,6 @@ run_invalid "invalid/fk_references_non_unique" "tests/invalid/fk_references_non_
 run_invalid "invalid/cycle" "tests/invalid/cycle/schema.sql" "Cycle detected"
 run_invalid "invalid/self_reference" "tests/invalid/self_reference/schema.sql" "Self-referencing foreign key"
 run_invalid "invalid/unsupported_pk_generation_type" "tests/invalid/unsupported_pk_generation_type/schema.sql" "Primary key column 'users.born_on' must use INT, BIGINT, SMALLINT, TEXT, VARCHAR, or CHAR for generation"
-run_invalid "invalid/composite_primary_key" "tests/invalid/composite_primary_key/schema.sql" "Composite primary keys are not supported yet"
 run_invalid "invalid/unsupported_fk_generation_type" "tests/invalid/unsupported_fk_generation_type/schema.sql" "Foreign key column 'orders.user_born_on' must use INT, BIGINT, SMALLINT, TEXT, or VARCHAR for generation"
 run_valid "valid/date_generation" "tests/invalid/unsupported_date/schema.sql"
 run_invalid "invalid/unique_boolean_too_many" "tests/invalid/unique_boolean_too_many/schema.sql" "UNIQUE BOOLEAN"
@@ -676,6 +770,7 @@ run_invalid "invalid/unique_check_in_too_many" "tests/invalid/unique_check_in_to
 run_invalid "invalid/unsupported_check" "tests/invalid/unsupported_check/schema.sql" "Unsupported CHECK constraint on users.age: CHECK (age + score > 100)"
 run_invalid "invalid/composite_unique_fk_too_many" "tests/invalid/composite_unique_fk_too_many/schema.sql" "Composite UNIQUE(user_id, product_id) on table 'order_items' can only produce 200 distinct tuples." --rows users=10 --rows products=20 --rows order_items=250
 run_invalid "invalid/composite_unique_check_too_many" "tests/invalid/composite_unique_check_too_many/schema.sql" "Composite UNIQUE(age, status) on table 'users' can only produce 4 distinct tuples." --rows users=5
+run_invalid "invalid/composite_primary_key_too_many" "tests/invalid/composite_primary_key_too_many/schema.sql" "Composite PRIMARY KEY(user_id, team_id) on table 'memberships' can only produce 4 distinct tuples." --rows memberships=5
 run_invalid "invalid/composite_unique_missing_column" "tests/invalid/composite_unique_missing_column/schema.sql" "Unique constraint on table 'cart_items' references an unknown column"
 run_invalid "invalid/multiple_errors" "tests/invalid/multiple_errors/schema.sql" "Duplicate column name 'users.id'"
 run_config_unknown_table

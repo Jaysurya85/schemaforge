@@ -42,6 +42,11 @@ bool has_already_unique_member(const Table& table, const TableConstraint& constr
   });
 }
 
+bool is_composite_key_constraint(const TableConstraint& constraint) {
+  return (constraint.type == ConstraintType::PrimaryKey || constraint.type == ConstraintType::Unique) &&
+         constraint.columns.size() > 1;
+}
+
 const ColumnData* find_column_data(const std::vector<ColumnData>& columns, const Column* column) {
   for (const auto& column_data : columns) {
     if (column_data.column == column) {
@@ -93,8 +98,8 @@ std::vector<GeneratedValue> distinct_values(const std::vector<GeneratedValue>& v
   return distinct;
 }
 
-std::string composite_unique_name(const TableConstraint& constraint) {
-  std::string name = "UNIQUE(";
+std::string composite_key_name(const TableConstraint& constraint) {
+  std::string name = constraint.type == ConstraintType::PrimaryKey ? "PRIMARY KEY(" : "UNIQUE(";
   for (std::size_t index = 0; index < constraint.columns.size(); ++index) {
     if (index > 0) {
       name += ", ";
@@ -137,9 +142,9 @@ std::string tuple_key(const std::vector<const ColumnData*>& columns, std::size_t
   return key;
 }
 
-void verify_composite_unique_constraints(const TableData& table_data) {
+void verify_composite_key_constraints(const TableData& table_data) {
   for (const auto& constraint : table_data.table->get_table_constraints()) {
-    if (constraint.type != ConstraintType::Unique || constraint.columns.size() <= 1) {
+    if (!is_composite_key_constraint(constraint)) {
       continue;
     }
 
@@ -161,26 +166,26 @@ void verify_composite_unique_constraints(const TableData& table_data) {
     for (std::size_t row = 0; row < row_count; ++row) {
       if (!seen.insert(tuple_key(columns, row)).second) {
         throw std::runtime_error("Generated duplicate tuple for composite " +
-                                 composite_unique_name(constraint) + " on table '" +
+                                 composite_key_name(constraint) + " on table '" +
                                  table_data.table->get_table_name() + "'");
       }
     }
   }
 }
 
-void apply_composite_unique_constraints(const Table& table, int num_rows,
-                                        const GenerationConfig& config,
-                                        const KeyRegistry& key_registry,
-                                        std::vector<ColumnData>& columns) {
+void apply_composite_key_constraints(const Table& table, int num_rows,
+                                     const GenerationConfig& config,
+                                     const KeyRegistry& key_registry,
+                                     std::vector<ColumnData>& columns) {
   if (num_rows <= 0) {
     return;
   }
 
   for (const auto& constraint : table.get_table_constraints()) {
-    if (constraint.type != ConstraintType::Unique || constraint.columns.size() <= 1) {
+    if (!is_composite_key_constraint(constraint)) {
       continue;
     }
-    if (has_already_unique_member(table, constraint)) {
+    if (constraint.type == ConstraintType::Unique && has_already_unique_member(table, constraint)) {
       continue;
     }
 
@@ -196,7 +201,7 @@ void apply_composite_unique_constraints(const Table& table, int num_rows,
 
       auto domain = composite_domain_for_column(table, *column_data, config, key_registry);
       if (domain.empty()) {
-        throw std::runtime_error("Composite " + composite_unique_name(constraint) +
+        throw std::runtime_error("Composite " + composite_key_name(constraint) +
                                  " on table '" + table.get_table_name() +
                                  "' has no values for column '" + column->get_column_name() + "'");
       }
@@ -241,7 +246,7 @@ std::vector<ColumnData> GenerationPlan::generate_columns_data(const Table& table
         .data = std::move(ValueGenerator::generate_column_data(
             *column, table, num_rows, config, random_engine, key_registry))});
   }
-  apply_composite_unique_constraints(table, num_rows, config, key_registry, column_data);
+  apply_composite_key_constraints(table, num_rows, config, key_registry, column_data);
   return column_data;
 }
 
@@ -274,7 +279,7 @@ std::vector<TableData> GenerationPlan::generate_table_data(const std::vector<Tab
         .table = table,
         .columns = std::move(generate_columns_data(*table, num_rows, config, random_engine,
                                                    key_registry))});
-    verify_composite_unique_constraints(table_data.back());
+    verify_composite_key_constraints(table_data.back());
   }
   return table_data;
 }

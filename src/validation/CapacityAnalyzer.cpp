@@ -97,8 +97,8 @@ int composite_column_domain_size(const Table* table, const Column* column,
   return requested_rows;
 }
 
-std::string composite_unique_name(const TableConstraint& constraint) {
-  std::string name = "UNIQUE(";
+std::string composite_key_name(const TableConstraint& constraint) {
+  std::string name = constraint.type == ConstraintType::PrimaryKey ? "PRIMARY KEY(" : "UNIQUE(";
   for (std::size_t index = 0; index < constraint.columns.size(); ++index) {
     if (index > 0) {
       name += ", ";
@@ -110,11 +110,12 @@ std::string composite_unique_name(const TableConstraint& constraint) {
   return name;
 }
 
-std::optional<RowCapacityLimit> composite_unique_capacity_limit(const Table* table,
-                                                               const TableConstraint& constraint,
-                                                               const GenerationConfig& config,
-                                                               int requested_rows) {
-  if (constraint.type != ConstraintType::Unique || constraint.columns.size() <= 1) {
+std::optional<RowCapacityLimit> composite_key_capacity_limit(const Table* table,
+                                                            const TableConstraint& constraint,
+                                                            const GenerationConfig& config,
+                                                            int requested_rows) {
+  if ((constraint.type != ConstraintType::Unique && constraint.type != ConstraintType::PrimaryKey) ||
+      constraint.columns.size() <= 1) {
     return std::nullopt;
   }
 
@@ -138,7 +139,7 @@ std::optional<RowCapacityLimit> composite_unique_capacity_limit(const Table* tab
 
   return RowCapacityLimit{
       .max_rows = static_cast<int>(std::min<std::int64_t>(capacity, std::numeric_limits<int>::max())),
-      .reason = "Composite " + composite_unique_name(constraint) + " on table '" +
+      .reason = "Composite " + composite_key_name(constraint) + " on table '" +
                 table->get_table_name() + "' can only produce " + std::to_string(capacity) +
                 " distinct tuples."};
 }
@@ -211,7 +212,7 @@ SchemaCapacityInfo CapacityAnalyzer::analyze(const std::vector<TablePtr>& tables
 
     for (const auto& constraint : table_ptr->get_table_constraints()) {
       auto composite_limit =
-          composite_unique_capacity_limit(table_ptr.get(), constraint, config, table_info.requested_rows);
+          composite_key_capacity_limit(table_ptr.get(), constraint, config, table_info.requested_rows);
       if (composite_limit.has_value()) {
         apply_capacity_limit(table_info, composite_limit.value());
       }
