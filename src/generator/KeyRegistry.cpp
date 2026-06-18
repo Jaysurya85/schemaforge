@@ -46,8 +46,9 @@ bool is_single_key_constraint(const TableConstraint& constraint) {
   return column != nullptr;
 }
 
-bool is_composite_primary_key_constraint(const TableConstraint& constraint) {
-  if (constraint.type != ConstraintType::PrimaryKey || constraint.columns.size() <= 1) {
+bool is_composite_key_constraint(const TableConstraint& constraint) {
+  if ((constraint.type != ConstraintType::PrimaryKey && constraint.type != ConstraintType::Unique) ||
+      constraint.columns.size() <= 1) {
     return false;
   }
 
@@ -313,7 +314,7 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
     const Table* table = table_ptr.get();
     const int row_count = config.get_row_count(table->get_table_name());
     for (const auto& constraint : table->get_table_constraints()) {
-      if (is_composite_primary_key_constraint(constraint)) {
+      if (is_composite_key_constraint(constraint)) {
         key_registry.key_sources[make_key(table, constraint.columns)] =
             TupleKeySource{.values = generate_tuple_values(table, constraint, row_count)};
         continue;

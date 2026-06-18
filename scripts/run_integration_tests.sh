@@ -537,6 +537,7 @@ run_key_registry_composite_primary_key() {
 #include "schemaforge/config/GenerationConfig.h"
 #include "schemaforge/generator/GeneratedValue.h"
 #include "schemaforge/generator/KeyRegistry.h"
+#include "schemaforge/generator/RandomEngine.h"
 #include "schemaforge/schema/Column.h"
 #include "schemaforge/schema/Table.h"
 
@@ -577,6 +578,114 @@ int main() {
       std::cerr << "Actual: (" << integer_value(key[0]) << ", " << integer_value(key[1])
                 << ")\n";
     }
+    return 1;
+  }
+
+  RandomEngine random_engine(42);
+  const auto random_key = registry.random_key(tables.front().get(), primary_columns, random_engine);
+  if (random_key.size() != 2) {
+    std::cerr << "Expected random composite key to return 2 values\n";
+    return 1;
+  }
+
+  return 0;
+}
+EOF
+
+  if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
+      "${source_file}" \
+      "${ROOT_DIR}/src/generator/KeyRegistry.cpp" \
+      "${ROOT_DIR}/src/generator/TextGenerator.cpp" \
+      "${ROOT_DIR}/src/domain/ColumnDomainResolver.cpp" \
+      "${ROOT_DIR}/src/config/GenerationConfig.cpp" \
+      "${ROOT_DIR}/src/schema/Column.cpp" \
+      "${ROOT_DIR}/src/schema/Table.cpp" \
+      -lyaml-cpp \
+      -o "${binary_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if "${binary_file}" >"${log_file}" 2>&1; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_key_registry_composite_unique() {
+  local name="unit/key_registry_composite_unique"
+  local source_file="${TMP_DIR}/key_registry_composite_unique.cpp"
+  local binary_file="${TMP_DIR}/key_registry_composite_unique"
+  local log_file="${TMP_DIR}/key_registry_composite_unique.log"
+
+  cat >"${source_file}" <<'EOF'
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+#include "schemaforge/config/GenerationConfig.h"
+#include "schemaforge/generator/GeneratedValue.h"
+#include "schemaforge/generator/KeyRegistry.h"
+#include "schemaforge/generator/RandomEngine.h"
+#include "schemaforge/schema/Column.h"
+#include "schemaforge/schema/Table.h"
+
+std::int64_t integer_value(const schemaforge::GeneratedValue& value) {
+  return value.visit([](const auto& typed_value) -> std::int64_t {
+    using ValueType = std::decay_t<decltype(typed_value)>;
+    if constexpr (std::is_same_v<ValueType, std::int64_t>) {
+      return typed_value;
+    }
+    return -1;
+  });
+}
+
+bool is_expected_tuple(const std::vector<schemaforge::GeneratedValue>& key) {
+  if (key.size() != 2) {
+    return false;
+  }
+  const auto left = integer_value(key[0]);
+  const auto right = integer_value(key[1]);
+  return left == 1 && right >= 1 && right <= 4;
+}
+
+int main() {
+  using namespace schemaforge;
+
+  std::vector<ColumnPtr> columns;
+  columns.push_back(std::make_unique<Column>("user_id", ColumnType{.data_type = DataType::INT}));
+  columns.push_back(std::make_unique<Column>("product_id", ColumnType{.data_type = DataType::INT}));
+  std::vector<Column*> unique_columns{columns[0].get(), columns[1].get()};
+  std::vector<TableConstraint> constraints{
+      TableConstraint(ConstraintType::Unique, unique_columns)};
+
+  auto table = std::make_unique<Table>("cart_items", std::move(columns), constraints,
+                                       std::vector<ForeignKeySpec>{}, std::vector<ForeignKey>{});
+  std::vector<TablePtr> tables;
+  tables.push_back(std::move(table));
+
+  GenerationConfig config = GenerationConfig::make_default();
+  config.table_row_counts["cart_items"] = 4;
+
+  const KeyRegistry registry = KeyRegistry::build_from_tables(tables, config);
+  const auto key = registry.key_at_row(tables.front().get(), unique_columns, 1);
+  if (key.size() != 2 || integer_value(key[0]) != 1 || integer_value(key[1]) != 2) {
+    std::cerr << "Expected composite UNIQUE row 2 to be (1, 2)\n";
+    if (key.size() == 2) {
+      std::cerr << "Actual: (" << integer_value(key[0]) << ", " << integer_value(key[1])
+                << ")\n";
+    }
+    return 1;
+  }
+
+  RandomEngine random_engine(42);
+  const auto random_key = registry.random_key(tables.front().get(), unique_columns, random_engine);
+  if (!is_expected_tuple(random_key)) {
+    std::cerr << "Expected random composite UNIQUE key to return one registered tuple\n";
     return 1;
   }
 
@@ -678,6 +787,7 @@ run_sqlite_disabled
 run_sql_literal_formatting
 run_key_registry_pattern_sources
 run_key_registry_composite_primary_key
+run_key_registry_composite_unique
 require_artifact_contains "valid/all_supported_types_output" "${ARTIFACT_DIR}/valid_all_supported_types.sql" \
   "VALUES (1, 1, 1, 'title_1', 'slug_1', 'A', 'AA', 10.50, 10.50, 10.50, 10.50, true, '2026-01-01', '2026-01-01 00:00:00', '00:00:01');"
 require_artifact_contains "valid/char_primary_key_output" "${ARTIFACT_DIR}/valid_char_primary_key.sql" \
