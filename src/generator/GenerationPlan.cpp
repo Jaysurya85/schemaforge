@@ -24,6 +24,10 @@ const ForeignKey* find_single_column_foreign_key(const Table& table, const Colum
   return nullptr;
 }
 
+bool is_composite_foreign_key(const ForeignKey& foreign_key) {
+  return foreign_key.local_columns.size() > 1 && foreign_key.referenced_columns.size() > 1;
+}
+
 bool has_single_column_constraint(const Table& table, const Column* column,
                                   ConstraintType constraint_type) {
   for (const auto& constraint : table.get_table_constraints()) {
@@ -173,6 +177,56 @@ void verify_composite_key_constraints(const TableData& table_data) {
   }
 }
 
+void apply_composite_foreign_keys(const Table& table, int num_rows, RandomEngine& random_engine,
+                                  const KeyRegistry& key_registry,
+                                  std::vector<ColumnData>& columns) {
+  if (num_rows <= 0) {
+    return;
+  }
+
+  for (const auto& foreign_key : table.get_foreign_keys()) {
+    if (!is_composite_foreign_key(foreign_key)) {
+      continue;
+    }
+
+    if (foreign_key.local_columns.size() != foreign_key.referenced_columns.size()) {
+      throw std::runtime_error("Composite foreign key on table '" + table.get_table_name() +
+                               "' has mismatched local and referenced column counts");
+    }
+
+    std::vector<ColumnData*> local_columns;
+    local_columns.reserve(foreign_key.local_columns.size());
+    for (const Column* column : foreign_key.local_columns) {
+      ColumnData* column_data = find_column_data(columns, column);
+      if (column_data == nullptr) {
+        throw std::runtime_error("Composite foreign key on table '" + table.get_table_name() +
+                                 "' references missing generated column '" +
+                                 (column == nullptr ? std::string("<unknown>")
+                                                    : column->get_column_name()) +
+                                 "'");
+      }
+      local_columns.push_back(column_data);
+    }
+
+    for (int row = 0; row < num_rows; ++row) {
+      const auto parent_key = key_registry.random_key(foreign_key.referenced_table,
+                                                      foreign_key.referenced_columns,
+                                                      random_engine);
+      if (parent_key.size() != local_columns.size()) {
+        throw std::runtime_error("Composite foreign key on table '" + table.get_table_name() +
+                                 "' expected " + std::to_string(local_columns.size()) +
+                                 " values from referenced key but got " +
+                                 std::to_string(parent_key.size()));
+      }
+
+      for (std::size_t column_index = 0; column_index < local_columns.size(); ++column_index) {
+        local_columns[column_index]->data[static_cast<std::size_t>(row)] =
+            parent_key[column_index];
+      }
+    }
+  }
+}
+
 void apply_composite_key_constraints(const Table& table, int num_rows,
                                      const GenerationConfig& config,
                                      const KeyRegistry& key_registry,
@@ -246,6 +300,7 @@ std::vector<ColumnData> GenerationPlan::generate_columns_data(const Table& table
         .data = std::move(ValueGenerator::generate_column_data(
             *column, table, num_rows, config, random_engine, key_registry))});
   }
+  apply_composite_foreign_keys(table, num_rows, random_engine, key_registry, column_data);
   apply_composite_key_constraints(table, num_rows, config, key_registry, column_data);
   return column_data;
 }

@@ -782,6 +782,8 @@ run_valid "valid/composite_primary_key_text" "tests/valid/composite_primary_key_
 run_valid "valid/composite_unique_int" "tests/valid/composite_unique_int/schema.sql"
 run_valid "valid/composite_unique_text" "tests/valid/composite_unique_text/schema.sql"
 run_valid "valid/composite_unique_fk" "tests/valid/composite_unique_fk/schema.sql"
+run_valid "valid/composite_fk_primary_key" "tests/valid/composite_fk_primary_key/schema.sql" --rows memberships=4 --rows membership_events=4
+run_valid "valid/composite_fk_unique" "tests/valid/composite_fk_unique/schema.sql" --rows regions=4 --rows offices=4
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
 run_sqlite_disabled
 run_sql_literal_formatting
@@ -852,6 +854,10 @@ require_artifact_contains "valid/composite_unique_fk_output_first" "${ARTIFACT_D
   "VALUES (1, 1, 1);"
 require_artifact_contains "valid/composite_unique_fk_output_nested" "${ARTIFACT_DIR}/valid_composite_unique_fk.sql" \
   "VALUES (2, 1, 2);"
+require_artifact_contains "valid/composite_fk_primary_key_output" "${ARTIFACT_DIR}/valid_composite_fk_primary_key.sql" \
+  "INSERT INTO membership_events (id, user_id, team_id) VALUES (2, 2, 1);"
+require_artifact_contains "valid/composite_fk_unique_output" "${ARTIFACT_DIR}/valid_composite_fk_unique.sql" \
+  "INSERT INTO offices (id, country_code, region_code) VALUES (2, 2, 1);"
 
 run_invalid "invalid/missing_fk_table" "tests/invalid/missing_fk_table/schema.sql" "Referenced table 'users' not found"
 run_invalid "invalid/missing_fk_column" "tests/invalid/missing_fk_column/schema.sql" "Referenced column 'user_id' not found"

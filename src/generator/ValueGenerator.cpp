@@ -298,17 +298,14 @@ std::vector<GeneratedValue> ValueGenerator::generate_column_data(
 
   const ForeignKey* foreign_key = find_foreign_key(table, column);
   if (foreign_key != nullptr) {
-    if (foreign_key->local_columns.size() != 1 || foreign_key->referenced_columns.size() != 1) {
-      throw std::runtime_error("Composite foreign keys are not supported for v0.1 generation " +
-                               std::to_string(foreign_key->local_columns.size()) + " local, " +
-                               std::to_string(foreign_key->referenced_columns.size()) +
-                               " referenced");
-    }
-
     if (!ColumnDomainResolver::is_integer_type(column_data_type) &&
         !ColumnDomainResolver::is_text_type(column_data_type)) {
       throw std::runtime_error("Foreign key column '" + column.get_column_name() +
                                "' must use an integer or text type for generation");
+    }
+
+    if (foreign_key->local_columns.size() != 1 || foreign_key->referenced_columns.size() != 1) {
+      return generate_by_type(column, num_rows);
     }
 
     if (has_unique_constraint) {
