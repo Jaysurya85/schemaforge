@@ -49,6 +49,22 @@ void BenchmarkEngine::record_generated_rows(BenchmarkReport& report,
   }
 }
 
+void BenchmarkEngine::record_configured_rows(BenchmarkReport& report,
+                                             const std::vector<TablePtr>& tables,
+                                             const GenerationConfig& config) {
+  report.generated_rows.clear();
+  report.total_rows = 0;
+
+  for (const auto& table : tables) {
+    const std::string table_name = table->get_table_name();
+    const int row_count = config.get_row_count(table_name);
+    const std::size_t normalized_row_count =
+        row_count < 0 ? 0 : static_cast<std::size_t>(row_count);
+    report.generated_rows.emplace_back(table_name, normalized_row_count);
+    report.total_rows += normalized_row_count;
+  }
+}
+
 bool BenchmarkEngine::write_report(const BenchmarkReport& report, const std::string& path) {
   YAML::Emitter yaml;
   yaml << YAML::BeginMap;

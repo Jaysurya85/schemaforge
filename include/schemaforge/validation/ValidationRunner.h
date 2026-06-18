@@ -23,6 +23,8 @@ class ValidationRunner {
                                               const SchemaCapacityInfo& capacity_info);
   static ValidationResult validate_sqlite(const std::string& schema_sql,
                                           const std::vector<std::string>& insert_statements);
+  static ValidationResult validate_sqlite_file(const std::string& schema_sql,
+                                               const std::string& insert_file);
 };
 
 }  // namespace schemaforge

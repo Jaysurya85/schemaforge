@@ -851,4 +851,9 @@ ValidationResult ValidationRunner::validate_sqlite(
   return SQLiteValidator::validate(schema_sql, insert_statements);
 }
 
+ValidationResult ValidationRunner::validate_sqlite_file(const std::string& schema_sql,
+                                                        const std::string& insert_file) {
+  return SQLiteValidator::validate_file(schema_sql, insert_file);
+}
+
 }  // namespace schemaforge

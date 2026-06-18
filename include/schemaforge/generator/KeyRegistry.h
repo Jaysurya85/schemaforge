@@ -40,7 +40,8 @@ class KeyRegistry {
   };
 
   struct TupleKeySource {
-    std::vector<std::vector<GeneratedValue>> values;
+    std::vector<Column*> columns;
+    int count;
   };
 
   using KeySource =
@@ -60,6 +61,9 @@ class KeyRegistry {
   std::unordered_map<KeyRef, KeySource, KeyRefHash> key_sources;
   static KeyRef make_key(const Table* table, const std::vector<Column*>& columns);
   static GeneratedValue value_at_row(const PatternKeySource& source, std::size_t row_index);
+  static std::vector<GeneratedValue> tuple_at_row(const Table* table,
+                                                  const TupleKeySource& source,
+                                                  std::size_t row_index);
 
  public:
   KeyRegistry() = default;

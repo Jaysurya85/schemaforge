@@ -28,6 +28,9 @@ class BenchmarkEngine {
  public:
   static void record_generated_rows(BenchmarkReport& report,
                                     const std::vector<TableData>& table_data);
+  static void record_configured_rows(BenchmarkReport& report,
+                                     const std::vector<TablePtr>& tables,
+                                     const GenerationConfig& config);
   static bool write_report(const BenchmarkReport& report, const std::string& path);
 };
 

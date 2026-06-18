@@ -1,4 +1,5 @@
 #include <chrono>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -98,21 +99,6 @@ SchemaAnalysis analyze_schema(const std::string& schema_path, bool verbose) {
           .table_order = std::move(table_order)};
 }
 
-bool write_output_file(const std::string& output_file,
-                       const std::vector<std::string>& insert_statements) {
-  std::ofstream file(output_file);
-  if (!file.is_open()) {
-    std::cerr << "Failed to open output file: " << output_file << '\n';
-    return false;
-  }
-
-  for (const auto& insert_statement : insert_statements) {
-    file << insert_statement << '\n';
-  }
-
-  return true;
-}
-
 int run_init(int argc, char* argv[]) {
   std::string config_path = "schemaforge.yaml";
   schemaforge::GenerationConfig generation_config = schemaforge::GenerationConfig::make_default();
@@ -178,27 +164,40 @@ int run_generate(int argc, char* argv[]) {
   }
 
   const auto generation_start = std::chrono::steady_clock::now();
-  std::vector<schemaforge::TableData> table_data =
-      schemaforge::GenerationPlan::generate_table_data(analysis.sorted_tables, generation_config);
-
-  const auto generation_end = std::chrono::steady_clock::now();
-
-  benchmark_report.generation_time_seconds = elapsed_seconds(generation_start, generation_end);
-  schemaforge::BenchmarkEngine::record_generated_rows(benchmark_report, table_data);
-
-  std::vector<std::string> insert_statements =
-      schemaforge::SqlInsertWriter::write_inserts(table_data);
-
-  if (!write_output_file(generation_config.output_file, insert_statements)) {
+  std::ofstream output_file(generation_config.output_file);
+  if (!output_file.is_open()) {
+    std::cerr << "Failed to open output file: " << generation_config.output_file << '\n';
     return 1;
   }
+
+  try {
+    schemaforge::GenerationPlan::stream_table_data(
+        analysis.sorted_tables, generation_config, [&output_file](const schemaforge::GeneratedRow& row) {
+          schemaforge::SqlInsertWriter::write_row(output_file, row);
+        });
+  } catch (const std::exception& error) {
+    std::cerr << "Failed to generate SQL INSERT statements: " << error.what() << '\n';
+    return 1;
+  }
+
+  output_file.close();
+  if (!output_file) {
+    std::cerr << "Failed to write output file: " << generation_config.output_file << '\n';
+    return 1;
+  }
+
+  const auto generation_end = std::chrono::steady_clock::now();
+  benchmark_report.generation_time_seconds = elapsed_seconds(generation_start, generation_end);
+  schemaforge::BenchmarkEngine::record_configured_rows(benchmark_report, analysis.sorted_tables,
+                                                       generation_config);
 
   std::cout << "Wrote SQL INSERT statements to " << generation_config.output_file << '\n';
 
   if (generation_config.sqlite_validation) {
     const auto validation_start = std::chrono::steady_clock::now();
     schemaforge::ValidationResult sqlite_validation_result =
-        schemaforge::ValidationRunner::validate_sqlite(analysis.sql, insert_statements);
+        schemaforge::ValidationRunner::validate_sqlite_file(analysis.sql,
+                                                            generation_config.output_file);
     const auto validation_end = std::chrono::steady_clock::now();
     benchmark_report.validation_time_seconds = elapsed_seconds(validation_start, validation_end);
     benchmark_report.sqlite_validation_status = sqlite_validation_result.is_valid

@@ -97,6 +97,33 @@ std::string SqlInsertWriter::write_row(const TableData& table_data, std::size_t 
   return output.str();
 }
 
+std::string SqlInsertWriter::write_row(const GeneratedRow& row) {
+  std::ostringstream output;
+
+  output << "INSERT INTO " << row.table->get_table_name() << " (";
+  for (std::size_t column_index = 0; column_index < row.columns.size(); ++column_index) {
+    if (column_index > 0) {
+      output << ", ";
+    }
+    output << row.columns[column_index]->get_column_name();
+  }
+
+  output << ") VALUES (";
+  for (std::size_t column_index = 0; column_index < row.values.size(); ++column_index) {
+    if (column_index > 0) {
+      output << ", ";
+    }
+    output << format_value(*row.columns[column_index], row.values[column_index]);
+  }
+  output << ");";
+
+  return output.str();
+}
+
+void SqlInsertWriter::write_row(std::ostream& output, const GeneratedRow& row) {
+  output << write_row(row) << '\n';
+}
+
 std::vector<std::string> SqlInsertWriter::write_inserts(const std::vector<TableData>& tables) {
   std::vector<std::string> inserts;
 
