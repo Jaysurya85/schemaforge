@@ -13,6 +13,8 @@ namespace schemaforge {
 struct EffectiveCheckConstraint {
   std::optional<double> min_value;
   std::optional<double> max_value;
+  bool min_inclusive{true};
+  bool max_inclusive{true};
   std::vector<GeneratedValue> allowed_values;
 };
 

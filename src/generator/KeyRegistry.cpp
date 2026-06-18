@@ -52,6 +52,30 @@ std::string key_name(const Table* table) {
   return table->get_table_name();
 }
 
+int integer_min_bound(const EffectiveCheckConstraint& check, double default_value) {
+  if (!check.min_value.has_value()) {
+    return static_cast<int>(std::ceil(default_value));
+  }
+
+  const double value = check.min_value.value();
+  if (check.min_inclusive) {
+    return static_cast<int>(std::ceil(value));
+  }
+  return static_cast<int>(std::floor(value)) + 1;
+}
+
+int integer_max_bound(const EffectiveCheckConstraint& check, double default_value) {
+  if (!check.max_value.has_value()) {
+    return static_cast<int>(std::floor(default_value));
+  }
+
+  const double value = check.max_value.value();
+  if (check.max_inclusive) {
+    return static_cast<int>(std::floor(value));
+  }
+  return static_cast<int>(std::ceil(value)) - 1;
+}
+
 }  // namespace
 
 bool KeyRegistry::KeyRef::operator==(const KeyRef& other) const {
@@ -205,10 +229,8 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
       }
 
       if (ColumnDomainResolver::is_integer_type(data_type)) {
-        const int start =
-            static_cast<int>(std::ceil(effective_check.min_value.value_or(1.0)));
-        const int end =
-            static_cast<int>(std::floor(effective_check.max_value.value_or(start + row_count - 1)));
+        const int start = integer_min_bound(effective_check, 1.0);
+        const int end = integer_max_bound(effective_check, start + row_count - 1);
         const int count = std::max(0, end - start + 1);
         key_registry.register_int_range(table, constraint.columns, start, count);
         continue;

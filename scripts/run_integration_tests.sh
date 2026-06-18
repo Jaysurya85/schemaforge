@@ -577,6 +577,11 @@ run_valid "valid/check_between" "tests/valid/check_between/schema.sql"
 run_valid "valid/check_text_in" "tests/valid/check_text_in/schema.sql"
 run_valid "valid/check_numeric_in" "tests/valid/check_numeric_in/schema.sql"
 run_valid "valid/check_decimal_min" "tests/valid/check_decimal_min/schema.sql"
+run_valid "valid/check_decimal_greater_than" "tests/valid/check_decimal_greater_than/schema.sql"
+run_valid "valid/check_decimal_greater_equal" "tests/valid/check_decimal_greater_equal/schema.sql"
+run_valid "valid/check_decimal_less_than" "tests/valid/check_decimal_less_than/schema.sql"
+run_valid "valid/check_decimal_less_equal" "tests/valid/check_decimal_less_equal/schema.sql"
+run_valid "valid/unique_decimal_check" "tests/valid/unique_decimal_check/schema.sql"
 run_valid "valid/composite_unique_int" "tests/valid/composite_unique_int/schema.sql"
 run_valid "valid/composite_unique_text" "tests/valid/composite_unique_text/schema.sql"
 run_valid "valid/composite_unique_fk" "tests/valid/composite_unique_fk/schema.sql"
@@ -622,6 +627,16 @@ require_artifact_contains "valid/check_numeric_in_output" "${ARTIFACT_DIR}/valid
   "VALUES (1, 10);"
 require_artifact_contains "valid/check_decimal_min_output" "${ARTIFACT_DIR}/valid_check_decimal_min.sql" \
   "VALUES (1, 0.00);"
+require_artifact_contains "valid/check_decimal_greater_than_output" "${ARTIFACT_DIR}/valid_check_decimal_greater_than.sql" \
+  "VALUES (1, 0.51);"
+require_artifact_contains "valid/check_decimal_greater_equal_output" "${ARTIFACT_DIR}/valid_check_decimal_greater_equal.sql" \
+  "VALUES (1, 0.50);"
+require_artifact_contains "valid/check_decimal_less_than_output" "${ARTIFACT_DIR}/valid_check_decimal_less_than.sql" \
+  "VALUES (2, 0.01);"
+require_artifact_contains "valid/check_decimal_less_equal_output" "${ARTIFACT_DIR}/valid_check_decimal_less_equal.sql" \
+  "VALUES (2, 10.50);"
+require_artifact_contains "valid/unique_decimal_check_output" "${ARTIFACT_DIR}/valid_unique_decimal_check.sql" \
+  "VALUES (1, 0.51);"
 require_artifact_contains "valid/composite_unique_int_output_first" "${ARTIFACT_DIR}/valid_composite_unique_int.sql" \
   "VALUES (1, 1, 1);"
 require_artifact_contains "valid/composite_unique_int_output_nested" "${ARTIFACT_DIR}/valid_composite_unique_int.sql" \

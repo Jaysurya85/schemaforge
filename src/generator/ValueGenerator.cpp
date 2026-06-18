@@ -78,6 +78,30 @@ TimeValue time_at(int seconds) {
   return TimeValue{.hour = seconds / 3600, .minute = (seconds % 3600) / 60, .second = seconds % 60};
 }
 
+std::int64_t integer_min_bound(const EffectiveCheckConstraint& check, double default_value) {
+  if (!check.min_value.has_value()) {
+    return static_cast<std::int64_t>(std::ceil(default_value));
+  }
+
+  const double value = check.min_value.value();
+  if (check.min_inclusive) {
+    return static_cast<std::int64_t>(std::ceil(value));
+  }
+  return static_cast<std::int64_t>(std::floor(value)) + 1;
+}
+
+std::int64_t integer_max_bound(const EffectiveCheckConstraint& check, double default_value) {
+  if (!check.max_value.has_value()) {
+    return static_cast<std::int64_t>(std::floor(default_value));
+  }
+
+  const double value = check.max_value.value();
+  if (check.max_inclusive) {
+    return static_cast<std::int64_t>(std::floor(value));
+  }
+  return static_cast<std::int64_t>(std::ceil(value)) - 1;
+}
+
 std::vector<GeneratedValue> generate_int_data(int num_rows) {
   std::vector<GeneratedValue> data;
   data.reserve(num_rows);
@@ -91,11 +115,9 @@ std::vector<GeneratedValue> generate_int_data(int num_rows) {
 
 std::vector<GeneratedValue> generate_int_range_data(const EffectiveCheckConstraint& check,
                                                     int num_rows) {
-  const auto min_value =
-      static_cast<std::int64_t>(std::ceil(check.min_value.value_or(1.0)));
+  const auto min_value = integer_min_bound(check, 1.0);
   const auto max_value =
-      static_cast<std::int64_t>(std::floor(check.max_value.value_or(static_cast<double>(
-          min_value + num_rows - 1))));
+      integer_max_bound(check, static_cast<double>(min_value + num_rows - 1));
   const std::int64_t range_size = std::max<std::int64_t>(1, max_value - min_value + 1);
   std::vector<GeneratedValue> data;
   data.reserve(num_rows);
@@ -118,8 +140,14 @@ std::vector<GeneratedValue> generate_decimal_data(int num_rows) {
 
 std::vector<GeneratedValue> generate_decimal_range_data(const EffectiveCheckConstraint& check,
                                                         int num_rows) {
-  const double min_value = check.min_value.value_or(0.0);
-  const double max_value = check.max_value.value_or(min_value + (static_cast<double>(num_rows) * 10.5));
+  constexpr double decimal_step = 0.01;
+  const double min_value = check.min_value.has_value()
+                               ? check.min_value.value() + (check.min_inclusive ? 0.0 : decimal_step)
+                               : 0.0;
+  const double max_value =
+      check.max_value.has_value()
+          ? check.max_value.value() - (check.max_inclusive ? 0.0 : decimal_step)
+          : min_value + (static_cast<double>(num_rows) * 10.5);
   const double range_width = std::max(0.0, max_value - min_value);
   std::vector<GeneratedValue> data;
   data.reserve(num_rows);

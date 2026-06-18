@@ -226,6 +226,8 @@ ColumnCheckConstraint parse_check_expression(const std::string& expression,
     check.column_name = match[1].str();
     check.min_value = std::stod(match[2].str());
     check.max_value = std::stod(match[3].str());
+    check.min_inclusive = true;
+    check.max_inclusive = true;
     return check;
   }
 
@@ -238,9 +240,11 @@ ColumnCheckConstraint parse_check_expression(const std::string& expression,
     const std::string op = match[2].str();
     const double number = std::stod(match[3].str());
     if (op == ">=" || op == ">") {
-      check.min_value = op == ">" ? number + 1.0 : number;
+      check.min_value = number;
+      check.min_inclusive = op == ">=";
     } else {
-      check.max_value = op == "<" ? number - 1.0 : number;
+      check.max_value = number;
+      check.max_inclusive = op == "<=";
     }
     return check;
   }

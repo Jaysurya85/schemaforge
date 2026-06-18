@@ -8,6 +8,46 @@
 
 namespace schemaforge {
 
+namespace {
+
+bool is_stricter_min(double current_value, bool current_inclusive, double candidate_value,
+                     bool candidate_inclusive) {
+  return candidate_value > current_value ||
+         (candidate_value == current_value && current_inclusive && !candidate_inclusive);
+}
+
+bool is_stricter_max(double current_value, bool current_inclusive, double candidate_value,
+                     bool candidate_inclusive) {
+  return candidate_value < current_value ||
+         (candidate_value == current_value && current_inclusive && !candidate_inclusive);
+}
+
+int integer_min_bound(const EffectiveCheckConstraint& check, double default_value) {
+  if (!check.min_value.has_value()) {
+    return static_cast<int>(std::ceil(default_value));
+  }
+
+  const double value = check.min_value.value();
+  if (check.min_inclusive) {
+    return static_cast<int>(std::ceil(value));
+  }
+  return static_cast<int>(std::floor(value)) + 1;
+}
+
+int integer_max_bound(const EffectiveCheckConstraint& check, double default_value) {
+  if (!check.max_value.has_value()) {
+    return static_cast<int>(std::floor(default_value));
+  }
+
+  const double value = check.max_value.value();
+  if (check.max_inclusive) {
+    return static_cast<int>(std::floor(value));
+  }
+  return static_cast<int>(std::ceil(value)) - 1;
+}
+
+}  // namespace
+
 bool ColumnDomainResolver::is_integer_type(DataType data_type) {
   return data_type == DataType::INT || data_type == DataType::BIGINT ||
          data_type == DataType::SMALLINT;
@@ -73,16 +113,20 @@ EffectiveCheckConstraint ColumnDomainResolver::effective_check_for_column(const 
 
     if (check.type == CheckConstraintType::Range) {
       if (check.min_value.has_value()) {
-        effective.min_value =
-            effective.min_value.has_value()
-                ? std::max(effective.min_value.value(), check.min_value.value())
-                : check.min_value.value();
+        if (!effective.min_value.has_value() ||
+            is_stricter_min(effective.min_value.value(), effective.min_inclusive,
+                            check.min_value.value(), check.min_inclusive)) {
+          effective.min_value = check.min_value;
+          effective.min_inclusive = check.min_inclusive;
+        }
       }
       if (check.max_value.has_value()) {
-        effective.max_value =
-            effective.max_value.has_value()
-                ? std::min(effective.max_value.value(), check.max_value.value())
-                : check.max_value.value();
+        if (!effective.max_value.has_value() ||
+            is_stricter_max(effective.max_value.value(), effective.max_inclusive,
+                            check.max_value.value(), check.max_inclusive)) {
+          effective.max_value = check.max_value;
+          effective.max_inclusive = check.max_inclusive;
+        }
       }
     }
   }
@@ -111,8 +155,8 @@ ColumnDomain ColumnDomainResolver::domain_for_column(const Table* table, const C
 
   if (is_integer_type(data_type) && domain.check.min_value.has_value() &&
       domain.check.max_value.has_value()) {
-    const int min_value = static_cast<int>(std::ceil(domain.check.min_value.value()));
-    const int max_value = static_cast<int>(std::floor(domain.check.max_value.value()));
+    const int min_value = integer_min_bound(domain.check, domain.check.min_value.value());
+    const int max_value = integer_max_bound(domain.check, domain.check.max_value.value());
     domain.finite_capacity = std::max(0, max_value - min_value + 1);
     return domain;
   }

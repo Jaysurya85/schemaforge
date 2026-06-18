@@ -34,6 +34,12 @@ Arch:
 sudo pacman -S yaml-cpp
 ```
 
+Build the bundled SQL parser library:
+
+```bash
+make -C external/sql-parser
+```
+
 ```bash
 make build
 ```
@@ -69,6 +75,8 @@ validation time is reported separately.
 ```bash
 scripts/run_integration_tests.sh
 ```
+
+Valid test outputs and benchmark reports are written to `tests/artifacts/`.
 
 ## Supported Features
 
@@ -115,6 +123,3 @@ stopping at the first issue.
 - Child tables that request rows while a referenced parent table has 0 rows.
 - Row-count requests that exceed finite unique capacities, including `BOOLEAN`, `CHAR(n)`, limited
   `CHECK` domains, composite unique domains, and unique foreign keys.
-
-
-Valid test outputs and benchmark reports are written to `tests/artifacts/`.
