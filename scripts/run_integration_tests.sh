@@ -368,6 +368,51 @@ run_sqlite_disabled() {
   fi
 }
 
+run_benchmark_example_smoke() {
+  local benchmark_case="$1"
+  local expected_sqlite_status="$2"
+  local expected_rows="$3"
+  local name="benchmark/${benchmark_case}_smoke"
+  local source_config="${ROOT_DIR}/examples/benchmarks/${benchmark_case}/schemaforge.yaml"
+  local config_file="${TMP_DIR}/${benchmark_case}_smoke.yaml"
+  local output_file="${TMP_DIR}/${benchmark_case}_smoke.sql"
+  local benchmark_file="${TMP_DIR}/${benchmark_case}_smoke_benchmark.yaml"
+  local log_file="${TMP_DIR}/${benchmark_case}_smoke.log"
+
+  cp "${source_config}" "${config_file}"
+  perl -0pi -e 's/(rows: )\d+/${1}10/g' "${config_file}"
+  perl -0pi -e "s#file: benchmark-results/${benchmark_case}\.sql#file: ${output_file}#" \
+    "${config_file}"
+  perl -0pi -e "s#file: benchmark-results/${benchmark_case}\.yaml#file: ${benchmark_file}#" \
+    "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      grep -q "total_rows: ${expected_rows}" "${benchmark_file}" &&
+      grep -q "throughput_rows_per_second:" "${benchmark_file}" &&
+      grep -q "sqlite: ${expected_sqlite_status}" "${benchmark_file}" &&
+      benchmark_metrics_valid "${output_file}" "${benchmark_file}" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_benchmark_unknown_case() {
+  local name="benchmark/unknown_case"
+  local log_file="${TMP_DIR}/benchmark_unknown_case.log"
+
+  if "${ROOT_DIR}/scripts/run_benchmarks.sh" unknown_case >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if grep -q "Unknown benchmark case: unknown_case" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 run_sql_literal_formatting() {
   local name="unit/sql_literal_formatting"
   local source_file="${TMP_DIR}/sql_literal_formatting.cpp"
@@ -808,6 +853,10 @@ run_valid "valid/composite_fk_primary_key" "tests/valid/composite_fk_primary_key
 run_valid "valid/composite_fk_unique" "tests/valid/composite_fk_unique/schema.sql" --rows regions=4 --rows offices=4
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
 run_sqlite_disabled
+run_benchmark_example_smoke "single_table_1m" "skipped" 10
+run_benchmark_example_smoke "users_orders_1m" "passed" 20
+run_benchmark_example_smoke "ecommerce_large" "skipped" 40
+run_benchmark_unknown_case
 run_sql_literal_formatting
 run_key_registry_pattern_sources
 run_key_registry_composite_primary_key

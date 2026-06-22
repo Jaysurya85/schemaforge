@@ -1,0 +1,16 @@
+schema: examples/benchmarks/users_orders_1m/schema.sql
+generation:
+  seed: 42
+  default_rows: 10
+output:
+  file: benchmark-results/users_orders_1m.sql
+  format: sql
+validation:
+  sqlite: true
+benchmark:
+  file: benchmark-results/users_orders_1m.yaml
+tables:
+  users:
+    rows: 100000
+  orders:
+    rows: 1000000

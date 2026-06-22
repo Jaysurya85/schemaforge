@@ -79,11 +79,42 @@ scripts/run_integration_tests.sh
 
 Valid test outputs and benchmark reports are written to `tests/artifacts/`.
 
+## Large-Scale Benchmarks
+
+Build SchemaForge, then run all benchmark examples from the repository root:
+
+```bash
+make build
+scripts/run_benchmarks.sh
+```
+
+Run one or more selected cases by name:
+
+```bash
+scripts/run_benchmarks.sh single_table_1m
+scripts/run_benchmarks.sh users_orders_1m ecommerce_large
+```
+
+The examples cover one million rows in a single table, 1.1 million parent-child rows with SQLite
+foreign-key validation, and a 1.61 million-row e-commerce dependency graph. The runner prints row
+count, generation time, throughput, output size, peak process memory, and SQLite status. Detailed
+schemas, configs, and notes live under `examples/benchmarks/`.
+
+Generated SQL, reports, and logs are retained under `benchmark-results/` and are ignored by Git.
+Running every case can use several hundred MiB of disk space. Remove the artifacts with:
+
+```bash
+rm -rf benchmark-results
+```
+
+Peak memory is process-wide RSS. For `users_orders_1m`, it includes the in-memory SQLite validation
+database; the other two cases disable SQLite so their memory figures focus on generation.
+
 ## Supported Features
 
 - Parses SQL `CREATE TABLE` schemas.
 - Supports `PRIMARY KEY`, `UNIQUE`, and `FOREIGN KEY` constraints.
-- Supports single-column primary keys.
+- Supports single-column and composite primary keys.
 - Supports single-column and composite unique constraints.
 - Supports foreign keys that reference primary-key or unique columns.
 - Orders tables by foreign-key dependencies before generating rows.
@@ -117,7 +148,6 @@ stopping at the first issue.
 - Self-referencing foreign keys, which are not supported yet.
 - Unsupported generation types.
 - Unsupported `CHECK` constraint expressions.
-- Composite primary keys, which are not supported yet.
 - Primary-key generation types outside `INT`, `BIGINT`, `SMALLINT`, `TEXT`, `VARCHAR`, and `CHAR`.
 - Foreign-key generation types outside `INT`, `BIGINT`, `SMALLINT`, `TEXT`, and `VARCHAR`.
 - YAML config entries that reference unknown tables.

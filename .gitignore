@@ -1,6 +1,7 @@
 build/
 cmake-build-*/
 tests/artifacts/
+benchmark-results/
 *.o
 *.so
 *.a

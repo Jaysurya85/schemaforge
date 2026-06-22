@@ -1,0 +1,20 @@
+schema: examples/benchmarks/ecommerce_large/schema.sql
+generation:
+  seed: 42
+  default_rows: 10
+output:
+  file: benchmark-results/ecommerce_large.sql
+  format: sql
+validation:
+  sqlite: false
+benchmark:
+  file: benchmark-results/ecommerce_large.yaml
+tables:
+  users:
+    rows: 100000
+  products:
+    rows: 10000
+  orders:
+    rows: 500000
+  order_items:
+    rows: 1000000
