@@ -1,7 +1,10 @@
 #include <chrono>
 #include <exception>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,6 +31,18 @@ struct SchemaAnalysis {
 double elapsed_seconds(std::chrono::steady_clock::time_point start,
                        std::chrono::steady_clock::time_point end) {
   return std::chrono::duration<double>(end - start).count();
+}
+
+std::string format_mebibytes(const std::optional<std::uint64_t>& bytes) {
+  if (!bytes.has_value()) {
+    return "unavailable";
+  }
+
+  constexpr double bytes_per_mebibyte = 1024.0 * 1024.0;
+  std::ostringstream formatted;
+  formatted << std::fixed << std::setprecision(1)
+            << static_cast<double>(*bytes) / bytes_per_mebibyte << " MiB";
+  return formatted.str();
 }
 
 void print_usage() {
@@ -190,6 +205,8 @@ int run_generate(int argc, char* argv[]) {
   benchmark_report.generation_time_seconds = elapsed_seconds(generation_start, generation_end);
   schemaforge::BenchmarkEngine::record_configured_rows(benchmark_report, analysis.sorted_tables,
                                                        generation_config);
+  benchmark_report.output_file_size_bytes =
+      schemaforge::BenchmarkEngine::output_file_size_bytes(generation_config.output_file);
 
   std::cout << "Wrote SQL INSERT statements to " << generation_config.output_file << '\n';
 
@@ -208,6 +225,8 @@ int run_generate(int argc, char* argv[]) {
     if (!sqlite_validation_result.is_valid) {
       benchmark_report.total_command_time_seconds =
           elapsed_seconds(command_start, std::chrono::steady_clock::now());
+      benchmark_report.peak_process_memory_bytes =
+          schemaforge::BenchmarkEngine::peak_process_memory_bytes();
       schemaforge::BenchmarkEngine::write_report(benchmark_report,
                                                  generation_config.benchmark_file);
       return 1;
@@ -218,6 +237,8 @@ int run_generate(int argc, char* argv[]) {
 
   benchmark_report.total_command_time_seconds =
       elapsed_seconds(command_start, std::chrono::steady_clock::now());
+  benchmark_report.peak_process_memory_bytes =
+      schemaforge::BenchmarkEngine::peak_process_memory_bytes();
   if (!schemaforge::BenchmarkEngine::write_report(benchmark_report,
                                                   generation_config.benchmark_file)) {
     return 1;
@@ -226,6 +247,10 @@ int run_generate(int argc, char* argv[]) {
   std::cout << "Wrote benchmark report to " << generation_config.benchmark_file << '\n';
   std::cout << "Total rows generated: " << benchmark_report.total_rows << '\n';
   std::cout << "Generation time: " << benchmark_report.generation_time_seconds << "s\n";
+  std::cout << "Output file size: "
+            << format_mebibytes(benchmark_report.output_file_size_bytes) << '\n';
+  std::cout << "Peak process memory usage: "
+            << format_mebibytes(benchmark_report.peak_process_memory_bytes) << '\n';
 
   return 0;
 }

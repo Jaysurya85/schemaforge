@@ -1,7 +1,13 @@
 #include "schemaforge/benchmark/BenchmarkEngine.h"
 
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+
+#if defined(__linux__)
+#include <sys/resource.h>
+#endif
 
 #include "yaml-cpp/yaml.h"
 
@@ -28,6 +34,16 @@ double generation_throughput(const BenchmarkReport& report) {
   }
 
   return static_cast<double>(report.total_rows) / report.generation_time_seconds;
+}
+
+void emit_optional_bytes(YAML::Emitter& yaml, const char* key,
+                         const std::optional<std::uint64_t>& value) {
+  yaml << YAML::Key << key << YAML::Value;
+  if (value.has_value()) {
+    yaml << *value;
+  } else {
+    yaml << YAML::Null;
+  }
 }
 
 }  // namespace
@@ -65,6 +81,37 @@ void BenchmarkEngine::record_configured_rows(BenchmarkReport& report,
   }
 }
 
+std::optional<std::uint64_t> BenchmarkEngine::output_file_size_bytes(
+    const std::string& path) {
+  std::error_code error;
+  const std::uintmax_t file_size = std::filesystem::file_size(path, error);
+  if (error || file_size > std::numeric_limits<std::uint64_t>::max()) {
+    return std::nullopt;
+  }
+
+  return static_cast<std::uint64_t>(file_size);
+}
+
+std::optional<std::uint64_t> BenchmarkEngine::peak_process_memory_bytes() {
+#if defined(__linux__)
+  rusage usage{};
+  if (getrusage(RUSAGE_SELF, &usage) != 0 || usage.ru_maxrss < 0) {
+    return std::nullopt;
+  }
+
+  constexpr std::uint64_t bytes_per_kibibyte = 1024;
+  const auto peak_kibibytes = static_cast<std::uint64_t>(usage.ru_maxrss);
+  if (peak_kibibytes >
+      std::numeric_limits<std::uint64_t>::max() / bytes_per_kibibyte) {
+    return std::nullopt;
+  }
+
+  return peak_kibibytes * bytes_per_kibibyte;
+#else
+  return std::nullopt;
+#endif
+}
+
 bool BenchmarkEngine::write_report(const BenchmarkReport& report, const std::string& path) {
   YAML::Emitter yaml;
   yaml << YAML::BeginMap;
@@ -80,6 +127,7 @@ bool BenchmarkEngine::write_report(const BenchmarkReport& report, const std::str
   yaml << YAML::Key << "time_seconds" << YAML::Value << report.generation_time_seconds;
   yaml << YAML::Key << "throughput_rows_per_second" << YAML::Value
        << generation_throughput(report);
+  emit_optional_bytes(yaml, "output_file_size_bytes", report.output_file_size_bytes);
   yaml << YAML::EndMap;
 
   yaml << YAML::Key << "validation";
@@ -93,6 +141,7 @@ bool BenchmarkEngine::write_report(const BenchmarkReport& report, const std::str
   yaml << YAML::Value << YAML::BeginMap;
   yaml << YAML::Key << "command_time_seconds" << YAML::Value
        << report.total_command_time_seconds;
+  emit_optional_bytes(yaml, "peak_process_memory_bytes", report.peak_process_memory_bytes);
   yaml << YAML::EndMap;
   yaml << YAML::EndMap;
 

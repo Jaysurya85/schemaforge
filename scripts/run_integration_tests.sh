@@ -39,6 +39,27 @@ record_fail() {
   FAILED=$((FAILED + 1))
 }
 
+benchmark_metrics_valid() {
+  local output_file="$1"
+  local benchmark_file="$2"
+  local generate_log="$3"
+  local output_size
+  output_size="$(wc -c <"${output_file}")"
+
+  if ! grep -q "output_file_size_bytes: ${output_size}" "${benchmark_file}" ||
+      ! grep -q "Output file size: .* MiB" "${generate_log}"; then
+    return 1
+  fi
+
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    grep -Eq "peak_process_memory_bytes: [1-9][0-9]*" "${benchmark_file}" &&
+      grep -q "Peak process memory usage: .* MiB" "${generate_log}"
+  else
+    grep -Eq "peak_process_memory_bytes: (~|null)" "${benchmark_file}" &&
+      grep -q "Peak process memory usage: unavailable" "${generate_log}"
+  fi
+}
+
 run_valid() {
   local name="$1"
   local schema_path="$2"
@@ -78,6 +99,7 @@ run_valid() {
       grep -q "SQLite Validation Result: Valid" "${generate_log}" &&
       grep -q "sqlite: passed" "${benchmark_file}" &&
       grep -q "total_rows:" "${benchmark_file}" &&
+      benchmark_metrics_valid "${output_file}" "${benchmark_file}" "${generate_log}" &&
       ! grep -q "Generated table data" "${generate_log}" &&
       [[ -s "${output_file}" ]] &&
       [[ -s "${benchmark_file}" ]]; then

@@ -68,7 +68,8 @@ Useful init options:
 
 `generate` writes INSERT statements to `output.sql` and benchmark metrics to `benchmark.yaml`.
 Generation throughput is calculated from generated rows divided by generation time only; SQLite
-validation time is reported separately.
+validation time is reported separately. On Linux, the benchmark also reports peak process memory
+usage. Output file size is reported on every supported platform.
 
 ## Tests
 
@@ -94,8 +95,8 @@ Valid test outputs and benchmark reports are written to `tests/artifacts/`.
   `FLOAT`, `DOUBLE`, `REAL`, `BOOLEAN`, `DATE`, `DATETIME`, and `TIME`.
 - Supports simple `CHECK` constraints for numeric ranges, `BETWEEN`, numeric `IN`, and text `IN`.
 - Optionally validates generated SQL in SQLite.
-- Writes benchmark metrics for generated rows, generation time, throughput, validation time, and
-  total command time.
+- Writes benchmark metrics for generated rows, generation time, throughput, output file size,
+  validation time, total command time, and Linux peak process memory usage.
 - Includes a complex marketplace test fixture for multi-table generation.
 
 ## Validation Coverage
