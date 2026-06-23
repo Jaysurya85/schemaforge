@@ -71,6 +71,34 @@ Generation throughput is calculated from generated rows divided by generation ti
 validation time is reported separately. On Linux, the benchmark also reports peak process memory
 usage. Output file size is reported on every supported platform.
 
+### CSV Output
+
+Set the output format and directory in the generation config:
+
+```yaml
+output:
+  format: csv
+  directory: output/
+```
+
+Then run the normal generation command:
+
+```bash
+./build/schemaforge generate --config schemaforge.yaml
+```
+
+Each table is streamed to its own file, such as `output/users.csv` and `output/orders.csv`. Files
+include a header in schema column order, and rows retain generation order. Missing directories are
+created automatically; `output.directory` is required for CSV configs.
+
+Text containing commas, quotes, CR, newlines, or surrounding whitespace is quoted, and embedded
+quotes are doubled. NULL is an empty field while an empty text value is written as `""`. Booleans
+use `true`/`false`, decimals use two fractional digits, and date/time values use the same padded
+formats as SQL output.
+
+SQLite validation is skipped for CSV because the current validator executes SQL statements. The
+benchmark still reports rows, throughput, memory, and the combined size of all generated CSV files.
+
 ## Tests
 
 ```bash
@@ -126,6 +154,7 @@ database; the other two cases disable SQLite so their memory figures focus on ge
   `FLOAT`, `DOUBLE`, `REAL`, `BOOLEAN`, `DATE`, `DATETIME`, and `TIME`.
 - Supports simple `CHECK` constraints for numeric ranges, `BETWEEN`, numeric `IN`, and text `IN`.
 - Optionally validates generated SQL in SQLite.
+- Streams one headered CSV file per table with typed value formatting and CSV escaping.
 - Writes benchmark metrics for generated rows, generation time, throughput, output file size,
   validation time, total command time, and Linux peak process memory usage.
 - Includes a complex marketplace test fixture for multi-table generation.

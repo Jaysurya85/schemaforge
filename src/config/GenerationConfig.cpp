@@ -14,6 +14,7 @@ GenerationConfig GenerationConfig::make_default() {
   generation_config.seed = 42;
   generation_config.schema_path = "schema.sql";
   generation_config.output_file = "output.sql";
+  generation_config.output_directory = "";
   generation_config.output_format = "sql";
   generation_config.benchmark_file = "benchmark.yaml";
   generation_config.sqlite_validation = true;
@@ -146,7 +147,11 @@ void GenerationConfig::write_context_file(const std::vector<std::string>& table_
 
   yaml << YAML::Key << "output";
   yaml << YAML::Value << YAML::BeginMap;
-  yaml << YAML::Key << "file" << YAML::Value << output_file;
+  if (output_format == "csv") {
+    yaml << YAML::Key << "directory" << YAML::Value << output_directory;
+  } else {
+    yaml << YAML::Key << "file" << YAML::Value << output_file;
+  }
   yaml << YAML::Key << "format" << YAML::Value << output_format;
   yaml << YAML::EndMap;
 
@@ -210,9 +215,17 @@ bool GenerationConfig::read_context_file(const std::string& path) {
       if (output_node["file"]) {
         output_file = output_node["file"].as<std::string>();
       }
+      if (output_node["directory"]) {
+        output_directory = output_node["directory"].as<std::string>();
+      }
       if (output_node["format"]) {
         output_format = output_node["format"].as<std::string>();
       }
+    }
+
+    if (output_format == "csv" && output_directory.empty()) {
+      std::cerr << "Invalid config file: output.directory is required for CSV output.\n";
+      return false;
     }
 
     if (config["validation"] && config["validation"]["sqlite"]) {

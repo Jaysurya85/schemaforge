@@ -413,6 +413,241 @@ run_benchmark_unknown_case() {
   fi
 }
 
+configure_csv_output() {
+  local config_file="$1"
+  local output_directory="$2"
+  local benchmark_file="$3"
+
+  perl -0pi -e "s#  file: output\.sql\n  format: sql#  directory: ${output_directory}\n  format: csv#" \
+    "${config_file}"
+  perl -0pi -e "s#file: benchmark\.yaml#file: ${benchmark_file}#" "${config_file}"
+}
+
+csv_metrics_valid() {
+  local benchmark_file="$1"
+  shift
+  local expected_size=0
+  local csv_file
+  for csv_file in "$@"; do
+    expected_size=$((expected_size + $(wc -c <"${csv_file}")))
+  done
+  grep -q "output_file_size_bytes: ${expected_size}" "${benchmark_file}"
+}
+
+run_csv_single_fk() {
+  local name="valid/csv_single_fk"
+  local config_file="${TMP_DIR}/csv_single_fk.yaml"
+  local output_directory="${TMP_DIR}/csv/single/nested"
+  local benchmark_file="${TMP_DIR}/csv_single_fk_benchmark.yaml"
+  local log_file="${TMP_DIR}/csv_single_fk.log"
+  local users_file="${output_directory}/users.csv"
+  local orders_file="${output_directory}/orders.csv"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  configure_csv_output "${config_file}" "${output_directory}" "${benchmark_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      [[ "$(head -n 1 "${users_file}")" == "id,name,email" ]] &&
+      [[ "$(head -n 1 "${orders_file}")" == "id,user_id" ]] &&
+      [[ "$(wc -l <"${users_file}")" -eq 11 ]] &&
+      [[ "$(wc -l <"${orders_file}")" -eq 11 ]] &&
+      awk -F, 'FNR > 1 && $1 != FNR - 1 { exit 1 }' "${users_file}" "${orders_file}" &&
+      awk -F, 'NR == FNR { if (NR > 1) ids[$1] = 1; next }
+                  FNR > 1 && !($2 in ids) { exit 1 }' "${users_file}" "${orders_file}" &&
+      grep -q "SQLite validation skipped for CSV output" "${log_file}" &&
+      grep -q "sqlite: skipped" "${benchmark_file}" &&
+      csv_metrics_valid "${benchmark_file}" "${users_file}" "${orders_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_csv_composite_fk() {
+  local name="valid/csv_composite_fk"
+  local config_file="${TMP_DIR}/csv_composite_fk.yaml"
+  local output_directory="${TMP_DIR}/csv/composite"
+  local benchmark_file="${TMP_DIR}/csv_composite_fk_benchmark.yaml"
+  local log_file="${TMP_DIR}/csv_composite_fk.log"
+  local parent_file="${output_directory}/memberships.csv"
+  local child_file="${output_directory}/membership_events.csv"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/composite_fk_primary_key/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  configure_csv_output "${config_file}" "${output_directory}" "${benchmark_file}"
+  perl -0pi -e 's/(memberships:\n\s+rows: )\d+/${1}4/' "${config_file}"
+  perl -0pi -e 's/(membership_events:\n\s+rows: )\d+/${1}4/' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      [[ "$(head -n 1 "${parent_file}")" == "user_id,team_id" ]] &&
+      [[ "$(head -n 1 "${child_file}")" == "id,user_id,team_id" ]] &&
+      awk -F, 'FNR > 1 && $1 != FNR - 1 { exit 1 }' "${child_file}" &&
+      awk -F, 'NR == FNR { if (NR > 1) keys[$1 SUBSEP $2] = 1; next }
+                  FNR > 1 && !(($2 SUBSEP $3) in keys) { exit 1 }' \
+        "${parent_file}" "${child_file}" &&
+      csv_metrics_valid "${benchmark_file}" "${parent_file}" "${child_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_csv_zero_rows() {
+  local name="valid/csv_zero_rows"
+  local config_file="${TMP_DIR}/csv_zero_rows.yaml"
+  local output_directory="${TMP_DIR}/csv/zero"
+  local benchmark_file="${TMP_DIR}/csv_zero_rows_benchmark.yaml"
+  local log_file="${TMP_DIR}/csv_zero_rows.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  configure_csv_output "${config_file}" "${output_directory}" "${benchmark_file}"
+  perl -0pi -e 's/(rows: )\d+/${1}0/g' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      [[ "$(cat "${output_directory}/users.csv")" == "id,name,email" ]] &&
+      [[ "$(cat "${output_directory}/orders.csv")" == "id,user_id" ]]; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_csv_missing_directory() {
+  local name="invalid/csv_missing_directory"
+  local config_file="${TMP_DIR}/csv_missing_directory.yaml"
+  local log_file="${TMP_DIR}/csv_missing_directory.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e 's/format: sql/format: csv/' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  if grep -q "output.directory is required for CSV output" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_csv_literal_formatting() {
+  local name="unit/csv_literal_formatting"
+  local source_file="${TMP_DIR}/csv_literal_formatting.cpp"
+  local binary_file="${TMP_DIR}/csv_literal_formatting"
+  local log_file="${TMP_DIR}/csv_literal_formatting.log"
+  local unsafe_directory="${TMP_DIR}/csv_unsafe"
+
+  cat >"${source_file}" <<'EOF'
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "schemaforge/output/CsvWriter.h"
+#include "schemaforge/schema/Column.h"
+#include "schemaforge/schema/Table.h"
+
+int main(int argc, char* argv[]) {
+  using namespace schemaforge;
+  if (argc != 2) {
+    return 1;
+  }
+
+  std::vector<ColumnPtr> columns;
+  columns.push_back(std::make_unique<Column>("id", ColumnType{.data_type = DataType::INT}));
+  columns.push_back(std::make_unique<Column>("note", ColumnType{.data_type = DataType::TEXT}));
+  columns.push_back(std::make_unique<Column>("empty_text", ColumnType{.data_type = DataType::TEXT}));
+  columns.push_back(std::make_unique<Column>("missing", ColumnType{.data_type = DataType::TEXT}));
+  columns.push_back(std::make_unique<Column>("active", ColumnType{.data_type = DataType::BOOLEAN}));
+  columns.push_back(std::make_unique<Column>("amount", ColumnType{.data_type = DataType::DECIMAL}));
+  columns.push_back(std::make_unique<Column>("born_on", ColumnType{.data_type = DataType::DATE}));
+  columns.push_back(std::make_unique<Column>("alarm", ColumnType{.data_type = DataType::TIME}));
+  columns.push_back(
+      std::make_unique<Column>("starts_at", ColumnType{.data_type = DataType::DATETIME}));
+
+  std::vector<const Column*> row_columns;
+  for (const auto& column : columns) {
+    row_columns.push_back(column.get());
+  }
+  Table table("samples", std::move(columns), {}, {}, {});
+  GeneratedRow row{
+      .table = &table,
+      .columns = std::move(row_columns),
+      .values = {GeneratedValue::integer(7), GeneratedValue::text("hello, \"world\"\nnext"),
+                 GeneratedValue::text(""), GeneratedValue::null(),
+                 GeneratedValue::boolean(true), GeneratedValue::numeric(12.5),
+                 GeneratedValue::date(DateValue{2026, 1, 1}),
+                 GeneratedValue::time(TimeValue{12, 30, 0}),
+                 GeneratedValue::date_time(
+                     DateTimeValue{DateValue{2026, 1, 1}, TimeValue{12, 30, 0}})},
+  };
+
+  std::ostringstream output;
+  CsvWriter::write_header(output, table);
+  CsvWriter::write_row(output, row);
+  const std::string expected =
+      "id,note,empty_text,missing,active,amount,born_on,alarm,starts_at\n"
+      "7,\"hello, \"\"world\"\"\nnext\",\"\",,true,12.50,2026-01-01,12:30:00,"
+      "2026-01-01 12:30:00\n";
+  if (output.str() != expected) {
+    std::cerr << "Expected:\n" << expected << "Actual:\n" << output.str();
+    return 1;
+  }
+
+  std::vector<ColumnPtr> unsafe_columns;
+  unsafe_columns.push_back(
+      std::make_unique<Column>("id", ColumnType{.data_type = DataType::INT}));
+  std::vector<TablePtr> unsafe_tables;
+  unsafe_tables.push_back(
+      std::make_unique<Table>("../escape", std::move(unsafe_columns),
+                              std::vector<TableConstraint>{}, std::vector<ForeignKeySpec>{},
+                              std::vector<ForeignKey>{}));
+  try {
+    CsvWriter unsafe_writer(argv[1], unsafe_tables);
+    std::cerr << "Expected unsafe table name to be rejected\n";
+    return 1;
+  } catch (const std::runtime_error&) {
+  }
+
+  return 0;
+}
+EOF
+
+  if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
+      "${source_file}" \
+      "${ROOT_DIR}/src/output/CsvWriter.cpp" \
+      "${ROOT_DIR}/src/schema/Column.cpp" \
+      "${ROOT_DIR}/src/schema/Table.cpp" \
+      -o "${binary_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if "${binary_file}" "${unsafe_directory}" >"${log_file}" 2>&1; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 run_sql_literal_formatting() {
   local name="unit/sql_literal_formatting"
   local source_file="${TMP_DIR}/sql_literal_formatting.cpp"
@@ -857,6 +1092,11 @@ run_benchmark_example_smoke "single_table_1m" "skipped" 10
 run_benchmark_example_smoke "users_orders_1m" "passed" 20
 run_benchmark_example_smoke "ecommerce_large" "skipped" 40
 run_benchmark_unknown_case
+run_csv_single_fk
+run_csv_composite_fk
+run_csv_zero_rows
+run_csv_missing_directory
+run_csv_literal_formatting
 run_sql_literal_formatting
 run_key_registry_pattern_sources
 run_key_registry_composite_primary_key

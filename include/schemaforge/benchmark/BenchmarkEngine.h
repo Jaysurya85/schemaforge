@@ -36,6 +36,8 @@ class BenchmarkEngine {
                                      const std::vector<TablePtr>& tables,
                                      const GenerationConfig& config);
   static std::optional<std::uint64_t> output_file_size_bytes(const std::string& path);
+  static std::optional<std::uint64_t> output_files_size_bytes(
+      const std::vector<std::string>& paths);
   static std::optional<std::uint64_t> peak_process_memory_bytes();
   static bool write_report(const BenchmarkReport& report, const std::string& path);
 };

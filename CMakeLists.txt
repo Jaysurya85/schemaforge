@@ -30,6 +30,7 @@ add_executable(schemaforge
     src/generator/IntGenerator.cpp
     src/generator/TextGenerator.cpp
     src/io/FileReader.cpp
+    src/output/CsvWriter.cpp
     src/output/SqlInsertWriter.cpp
 )
 

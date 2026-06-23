@@ -5,6 +5,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "schemaforge/generator/GenerationPlan.h"
 #include "schemaforge/graph/DependencyGraph.h"
 #include "schemaforge/io/FileReader.h"
+#include "schemaforge/output/CsvWriter.h"
 #include "schemaforge/output/SqlInsertWriter.h"
 #include "schemaforge/parser/ParserAdapter.h"
 #include "schemaforge/schema/Table.h"
@@ -149,7 +151,7 @@ int run_generate(int argc, char* argv[]) {
   const auto command_start = std::chrono::steady_clock::now();
   schemaforge::BenchmarkReport benchmark_report;
 
-  if (generation_config.output_format != "sql") {
+  if (generation_config.output_format != "sql" && generation_config.output_format != "csv") {
     std::cerr << "Unsupported output format: " << generation_config.output_format << '\n';
     return 1;
   }
@@ -179,25 +181,37 @@ int run_generate(int argc, char* argv[]) {
   }
 
   const auto generation_start = std::chrono::steady_clock::now();
-  std::ofstream output_file(generation_config.output_file);
-  if (!output_file.is_open()) {
-    std::cerr << "Failed to open output file: " << generation_config.output_file << '\n';
-    return 1;
-  }
-
+  std::vector<std::string> output_files;
   try {
-    schemaforge::GenerationPlan::stream_table_data(
-        analysis.sorted_tables, generation_config, [&output_file](const schemaforge::GeneratedRow& row) {
-          schemaforge::SqlInsertWriter::write_row(output_file, row);
-        });
-  } catch (const std::exception& error) {
-    std::cerr << "Failed to generate SQL INSERT statements: " << error.what() << '\n';
-    return 1;
-  }
+    if (generation_config.output_format == "sql") {
+      std::ofstream output_file(generation_config.output_file);
+      if (!output_file.is_open()) {
+        throw std::runtime_error("Failed to open output file: " + generation_config.output_file);
+      }
 
-  output_file.close();
-  if (!output_file) {
-    std::cerr << "Failed to write output file: " << generation_config.output_file << '\n';
+      schemaforge::GenerationPlan::stream_table_data(
+          analysis.sorted_tables, generation_config,
+          [&output_file](const schemaforge::GeneratedRow& row) {
+            schemaforge::SqlInsertWriter::write_row(output_file, row);
+          });
+      output_file.close();
+      if (!output_file) {
+        throw std::runtime_error("Failed to write output file: " + generation_config.output_file);
+      }
+      output_files.push_back(generation_config.output_file);
+    } else {
+      schemaforge::CsvWriter csv_writer(generation_config.output_directory,
+                                        analysis.sorted_tables);
+      schemaforge::GenerationPlan::stream_table_data(
+          analysis.sorted_tables, generation_config,
+          [&csv_writer](const schemaforge::GeneratedRow& row) { csv_writer.write_row(row); });
+      csv_writer.close();
+      output_files = csv_writer.get_output_files();
+    }
+  } catch (const std::exception& error) {
+    std::cerr << "Failed to generate "
+              << (generation_config.output_format == "sql" ? "SQL INSERT statements" : "CSV files")
+              << ": " << error.what() << '\n';
     return 1;
   }
 
@@ -206,11 +220,15 @@ int run_generate(int argc, char* argv[]) {
   schemaforge::BenchmarkEngine::record_configured_rows(benchmark_report, analysis.sorted_tables,
                                                        generation_config);
   benchmark_report.output_file_size_bytes =
-      schemaforge::BenchmarkEngine::output_file_size_bytes(generation_config.output_file);
+      schemaforge::BenchmarkEngine::output_files_size_bytes(output_files);
 
-  std::cout << "Wrote SQL INSERT statements to " << generation_config.output_file << '\n';
+  if (generation_config.output_format == "sql") {
+    std::cout << "Wrote SQL INSERT statements to " << generation_config.output_file << '\n';
+  } else {
+    std::cout << "Wrote CSV files to " << generation_config.output_directory << '\n';
+  }
 
-  if (generation_config.sqlite_validation) {
+  if (generation_config.output_format == "sql" && generation_config.sqlite_validation) {
     const auto validation_start = std::chrono::steady_clock::now();
     schemaforge::ValidationResult sqlite_validation_result =
         schemaforge::ValidationRunner::validate_sqlite_file(analysis.sql,
@@ -233,6 +251,9 @@ int run_generate(int argc, char* argv[]) {
     }
   } else {
     benchmark_report.sqlite_validation_status = schemaforge::SQLiteValidationStatus::Skipped;
+    if (generation_config.output_format == "csv" && generation_config.sqlite_validation) {
+      std::cout << "\nSQLite validation skipped for CSV output.\n";
+    }
   }
 
   benchmark_report.total_command_time_seconds =

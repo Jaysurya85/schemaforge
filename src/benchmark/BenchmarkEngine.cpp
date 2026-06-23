@@ -92,6 +92,20 @@ std::optional<std::uint64_t> BenchmarkEngine::output_file_size_bytes(
   return static_cast<std::uint64_t>(file_size);
 }
 
+std::optional<std::uint64_t> BenchmarkEngine::output_files_size_bytes(
+    const std::vector<std::string>& paths) {
+  std::uint64_t total_size = 0;
+  for (const auto& path : paths) {
+    const auto file_size = output_file_size_bytes(path);
+    if (!file_size.has_value() ||
+        total_size > std::numeric_limits<std::uint64_t>::max() - *file_size) {
+      return std::nullopt;
+    }
+    total_size += *file_size;
+  }
+  return total_size;
+}
+
 std::optional<std::uint64_t> BenchmarkEngine::peak_process_memory_bytes() {
 #if defined(__linux__)
   rusage usage{};
