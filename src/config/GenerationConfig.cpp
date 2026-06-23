@@ -18,6 +18,7 @@ GenerationConfig GenerationConfig::make_default() {
   generation_config.output_format = "sql";
   generation_config.benchmark_file = "benchmark.yaml";
   generation_config.sqlite_validation = true;
+  generation_config.postgres_validation = false;
   generation_config.table_row_counts = {};
   return generation_config;
 }
@@ -158,6 +159,7 @@ void GenerationConfig::write_context_file(const std::vector<std::string>& table_
   yaml << YAML::Key << "validation";
   yaml << YAML::Value << YAML::BeginMap;
   yaml << YAML::Key << "sqlite" << YAML::Value << sqlite_validation;
+  yaml << YAML::Key << "postgres" << YAML::Value << postgres_validation;
   yaml << YAML::EndMap;
 
   yaml << YAML::Key << "benchmark";
@@ -230,6 +232,15 @@ bool GenerationConfig::read_context_file(const std::string& path) {
 
     if (config["validation"] && config["validation"]["sqlite"]) {
       sqlite_validation = config["validation"]["sqlite"].as<bool>();
+    }
+    if (config["validation"] && config["validation"]["postgres"]) {
+      postgres_validation = config["validation"]["postgres"].as<bool>();
+    }
+
+    if (postgres_validation && output_format != "csv" && output_format != "postgres_copy") {
+      std::cerr << "Invalid config file: PostgreSQL validation requires CSV or postgres_copy "
+                   "output.\n";
+      return false;
     }
 
     if (config["benchmark"] && config["benchmark"]["file"]) {

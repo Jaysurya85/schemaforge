@@ -59,13 +59,14 @@ run_case() {
     return 1
   fi
 
-  local rows generation_time throughput output_size peak_memory sqlite_status
+  local rows generation_time throughput output_size peak_memory sqlite_status postgres_status
   rows="$(yaml_value total_rows "${report}")"
   generation_time="$(yaml_value time_seconds "${report}")"
   throughput="$(yaml_value throughput_rows_per_second "${report}")"
   output_size="$(yaml_value output_file_size_bytes "${report}")"
   peak_memory="$(yaml_value peak_process_memory_bytes "${report}")"
   sqlite_status="$(yaml_value sqlite "${report}")"
+  postgres_status="$(yaml_value postgres "${report}")"
 
   printf '%-24s %s\n' "Rows:" "${rows}"
   printf '%-24s %s\n' "Generation time:" "$(format_seconds "${generation_time}")"
@@ -73,6 +74,7 @@ run_case() {
   printf '%-24s %s\n' "Output size:" "$(format_bytes "${output_size}")"
   printf '%-24s %s\n' "Peak process memory:" "$(format_bytes "${peak_memory}")"
   printf '%-24s %s\n' "SQLite validation:" "${sqlite_status}"
+  printf '%-24s %s\n' "PostgreSQL validation:" "${postgres_status}"
   printf '%-24s %s\n\n' "Report:" "benchmark-results/${benchmark_case}.yaml"
 }
 

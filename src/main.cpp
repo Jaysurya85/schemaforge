@@ -21,6 +21,7 @@
 #include "schemaforge/parser/ParserAdapter.h"
 #include "schemaforge/schema/Table.h"
 #include "schemaforge/validation/CapacityAnalyzer.h"
+#include "schemaforge/validation/PostgresDockerValidator.h"
 #include "schemaforge/validation/ValidationRunner.h"
 
 namespace {
@@ -289,6 +290,45 @@ int run_generate(int argc, char* argv[]) {
     } else if (generation_config.output_format == "postgres_copy" &&
                generation_config.sqlite_validation) {
       std::cout << "\nSQLite validation skipped for PostgreSQL COPY output.\n";
+    }
+  }
+
+  if (generation_config.postgres_validation) {
+    const auto postgres_validation_start = std::chrono::steady_clock::now();
+    const schemaforge::PostgresDockerValidationResult postgres_result =
+        schemaforge::PostgresDockerValidator::validate(
+            generation_config.schema_path, analysis.sorted_tables, generation_config);
+    const auto postgres_validation_end = std::chrono::steady_clock::now();
+    benchmark_report.postgres_validation_time_seconds =
+        elapsed_seconds(postgres_validation_start, postgres_validation_end);
+
+    if (postgres_result.status == schemaforge::PostgresDockerValidationStatus::Passed) {
+      benchmark_report.postgres_validation_status =
+          schemaforge::PostgresValidationStatus::Passed;
+      std::cout << "PostgreSQL Docker Validation Result: Valid\n";
+    } else if (postgres_result.status ==
+               schemaforge::PostgresDockerValidationStatus::Unavailable) {
+      benchmark_report.postgres_validation_status =
+          schemaforge::PostgresValidationStatus::Unavailable;
+      std::cout << "PostgreSQL Docker validation unavailable";
+      if (!postgres_result.errors.empty()) {
+        std::cout << ": " << postgres_result.errors.front();
+      }
+      std::cout << '\n';
+    } else {
+      benchmark_report.postgres_validation_status =
+          schemaforge::PostgresValidationStatus::Failed;
+      std::cerr << "PostgreSQL Docker Validation Result: Invalid\n";
+      for (const auto& error : postgres_result.errors) {
+        std::cerr << "- " << error << '\n';
+      }
+      benchmark_report.total_command_time_seconds =
+          elapsed_seconds(command_start, std::chrono::steady_clock::now());
+      benchmark_report.peak_process_memory_bytes =
+          schemaforge::BenchmarkEngine::peak_process_memory_bytes();
+      schemaforge::BenchmarkEngine::write_report(benchmark_report,
+                                                 generation_config.benchmark_file);
+      return 1;
     }
   }
 

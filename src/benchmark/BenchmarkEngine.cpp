@@ -28,6 +28,20 @@ std::string sqlite_status_to_string(SQLiteValidationStatus status) {
   return "skipped";
 }
 
+std::string postgres_status_to_string(PostgresValidationStatus status) {
+  switch (status) {
+    case PostgresValidationStatus::Failed:
+      return "failed";
+    case PostgresValidationStatus::Passed:
+      return "passed";
+    case PostgresValidationStatus::Unavailable:
+      return "unavailable";
+    case PostgresValidationStatus::Skipped:
+      return "skipped";
+  }
+  return "skipped";
+}
+
 double generation_throughput(const BenchmarkReport& report) {
   if (report.generation_time_seconds <= 0.0) {
     return 0.0;
@@ -149,6 +163,10 @@ bool BenchmarkEngine::write_report(const BenchmarkReport& report, const std::str
   yaml << YAML::Key << "sqlite" << YAML::Value
        << sqlite_status_to_string(report.sqlite_validation_status);
   yaml << YAML::Key << "time_seconds" << YAML::Value << report.validation_time_seconds;
+  yaml << YAML::Key << "postgres" << YAML::Value
+       << postgres_status_to_string(report.postgres_validation_status);
+  yaml << YAML::Key << "postgres_time_seconds" << YAML::Value
+       << report.postgres_validation_time_seconds;
   yaml << YAML::EndMap;
 
   yaml << YAML::Key << "total";

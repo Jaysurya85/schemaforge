@@ -16,6 +16,7 @@ add_executable(schemaforge
     src/schema/Table.cpp
     src/schema/Column.cpp
     src/validation/CapacityAnalyzer.cpp
+    src/validation/PostgresDockerValidator.cpp
     src/validation/SQLiteValidator.cpp
     src/validation/ValidationResult.cpp
     src/validation/ValidationRunner.cpp

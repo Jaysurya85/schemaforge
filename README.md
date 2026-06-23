@@ -125,6 +125,34 @@ PostgreSQL COPY output streams rows directly to one file and retains determinist
 SQLite validation is skipped because COPY syntax is PostgreSQL-specific; benchmark rows,
 throughput, memory, and output size are still reported.
 
+### PostgreSQL Docker Validation
+
+PostgreSQL validation is opt-in for CSV and `postgres_copy` output:
+
+```yaml
+validation:
+  sqlite: false
+  postgres: true
+```
+
+SchemaForge starts a temporary `postgres:17-alpine` container without publishing a host port,
+executes the schema, imports the generated data, and verifies every configured table row count.
+PostgreSQL enforces primary keys, unique constraints, checks, and foreign keys during the import.
+The container is removed after validation.
+
+If Docker is missing, inaccessible, or unresponsive, generation succeeds and the benchmark reports
+`postgres: unavailable`. Schema or import errors report `postgres: failed` and fail the command.
+The schema must use PostgreSQL-compatible DDL; compatibility errors from PostgreSQL are returned in
+the validation output.
+
+Run the real Docker import tests for both COPY and CSV with:
+
+```bash
+scripts/run_postgres_validation_tests.sh
+```
+
+The script exits successfully with a skip message when Docker is unavailable.
+
 ## Tests
 
 ```bash

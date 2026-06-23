@@ -665,6 +665,59 @@ run_postgres_copy_zero_rows() {
   fi
 }
 
+run_postgres_docker_unavailable() {
+  local name="valid/postgres_docker_unavailable"
+  local config_file="${TMP_DIR}/postgres_docker_unavailable.yaml"
+  local output_file="${TMP_DIR}/postgres_docker_unavailable.sql"
+  local benchmark_file="${TMP_DIR}/postgres_docker_unavailable_benchmark.yaml"
+  local log_file="${TMP_DIR}/postgres_docker_unavailable.log"
+  local fake_bin="${TMP_DIR}/fake-docker-bin"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  configure_postgres_copy_output "${config_file}" "${output_file}" "${benchmark_file}"
+  perl -0pi -e 's/(postgres: )false/${1}true/' "${config_file}"
+  mkdir -p "${fake_bin}"
+  printf '#!/usr/bin/env sh\necho "fake Docker daemon unavailable" >&2\nexit 1\n' \
+    >"${fake_bin}/docker"
+  chmod +x "${fake_bin}/docker"
+
+  if PATH="${fake_bin}:${PATH}" "${BINARY}" generate --config "${config_file}" \
+      >"${log_file}" 2>&1 &&
+      grep -q "PostgreSQL Docker validation unavailable" "${log_file}" &&
+      grep -q "postgres: unavailable" "${benchmark_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_postgres_validation_requires_supported_output() {
+  local name="invalid/postgres_validation_output_format"
+  local config_file="${TMP_DIR}/postgres_validation_output_format.yaml"
+  local log_file="${TMP_DIR}/postgres_validation_output_format.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e 's/(postgres: )false/${1}true/' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  if grep -q "PostgreSQL validation requires CSV or postgres_copy output" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 run_csv_literal_formatting() {
   local name="unit/csv_literal_formatting"
   local source_file="${TMP_DIR}/csv_literal_formatting.cpp"
@@ -1312,6 +1365,8 @@ run_csv_literal_formatting
 run_postgres_copy_single_fk
 run_postgres_copy_composite_fk
 run_postgres_copy_zero_rows
+run_postgres_docker_unavailable
+run_postgres_validation_requires_supported_output
 run_postgres_copy_literal_formatting
 run_sql_literal_formatting
 run_key_registry_pattern_sources

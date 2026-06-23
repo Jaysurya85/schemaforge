@@ -17,15 +17,24 @@ enum class SQLiteValidationStatus {
   Skipped,
 };
 
+enum class PostgresValidationStatus {
+  Failed,
+  Passed,
+  Skipped,
+  Unavailable,
+};
+
 struct BenchmarkReport {
   std::vector<std::pair<std::string, std::size_t>> generated_rows;
   std::size_t total_rows{0};
   double generation_time_seconds{0.0};
   double validation_time_seconds{0.0};
+  double postgres_validation_time_seconds{0.0};
   double total_command_time_seconds{0.0};
   std::optional<std::uint64_t> output_file_size_bytes;
   std::optional<std::uint64_t> peak_process_memory_bytes;
   SQLiteValidationStatus sqlite_validation_status{SQLiteValidationStatus::Skipped};
+  PostgresValidationStatus postgres_validation_status{PostgresValidationStatus::Skipped};
 };
 
 class BenchmarkEngine {

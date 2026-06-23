@@ -14,6 +14,7 @@ struct GenerationConfig {
   std::string output_format{"sql"};
   std::string benchmark_file{"benchmark.yaml"};
   bool sqlite_validation{true};
+  bool postgres_validation{false};
   std::unordered_map<std::string, int> table_row_counts;
 
   static GenerationConfig make_default();
