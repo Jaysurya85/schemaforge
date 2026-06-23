@@ -16,6 +16,7 @@
 #include "schemaforge/graph/DependencyGraph.h"
 #include "schemaforge/io/FileReader.h"
 #include "schemaforge/output/CsvWriter.h"
+#include "schemaforge/output/PostgresCopyWriter.h"
 #include "schemaforge/output/SqlInsertWriter.h"
 #include "schemaforge/parser/ParserAdapter.h"
 #include "schemaforge/schema/Table.h"
@@ -151,7 +152,8 @@ int run_generate(int argc, char* argv[]) {
   const auto command_start = std::chrono::steady_clock::now();
   schemaforge::BenchmarkReport benchmark_report;
 
-  if (generation_config.output_format != "sql" && generation_config.output_format != "csv") {
+  if (generation_config.output_format != "sql" && generation_config.output_format != "csv" &&
+      generation_config.output_format != "postgres_copy") {
     std::cerr << "Unsupported output format: " << generation_config.output_format << '\n';
     return 1;
   }
@@ -199,7 +201,7 @@ int run_generate(int argc, char* argv[]) {
         throw std::runtime_error("Failed to write output file: " + generation_config.output_file);
       }
       output_files.push_back(generation_config.output_file);
-    } else {
+    } else if (generation_config.output_format == "csv") {
       schemaforge::CsvWriter csv_writer(generation_config.output_directory,
                                         analysis.sorted_tables);
       schemaforge::GenerationPlan::stream_table_data(
@@ -207,11 +209,40 @@ int run_generate(int argc, char* argv[]) {
           [&csv_writer](const schemaforge::GeneratedRow& row) { csv_writer.write_row(row); });
       csv_writer.close();
       output_files = csv_writer.get_output_files();
+    } else {
+      std::ofstream output_file(generation_config.output_file, std::ios::binary);
+      if (!output_file.is_open()) {
+        throw std::runtime_error("Failed to open output file: " + generation_config.output_file);
+      }
+
+      schemaforge::PostgresCopyWriter copy_writer(output_file);
+      schemaforge::GenerationPlan::stream_table_data(
+          analysis.sorted_tables, generation_config,
+          schemaforge::GenerationStreamConsumer{
+              .table_started = [&copy_writer](const schemaforge::Table& table) {
+                copy_writer.begin_table(table);
+              },
+              .row_generated = [&copy_writer](const schemaforge::GeneratedRow& row) {
+                copy_writer.write_row(row);
+              },
+              .table_finished = [&copy_writer](const schemaforge::Table& table) {
+                copy_writer.end_table(table);
+              }});
+      copy_writer.close();
+      output_file.close();
+      if (!output_file) {
+        throw std::runtime_error("Failed to write output file: " + generation_config.output_file);
+      }
+      output_files.push_back(generation_config.output_file);
     }
   } catch (const std::exception& error) {
-    std::cerr << "Failed to generate "
-              << (generation_config.output_format == "sql" ? "SQL INSERT statements" : "CSV files")
-              << ": " << error.what() << '\n';
+    std::string output_description = "PostgreSQL COPY output";
+    if (generation_config.output_format == "sql") {
+      output_description = "SQL INSERT statements";
+    } else if (generation_config.output_format == "csv") {
+      output_description = "CSV files";
+    }
+    std::cerr << "Failed to generate " << output_description << ": " << error.what() << '\n';
     return 1;
   }
 
@@ -224,8 +255,10 @@ int run_generate(int argc, char* argv[]) {
 
   if (generation_config.output_format == "sql") {
     std::cout << "Wrote SQL INSERT statements to " << generation_config.output_file << '\n';
-  } else {
+  } else if (generation_config.output_format == "csv") {
     std::cout << "Wrote CSV files to " << generation_config.output_directory << '\n';
+  } else {
+    std::cout << "Wrote PostgreSQL COPY data to " << generation_config.output_file << '\n';
   }
 
   if (generation_config.output_format == "sql" && generation_config.sqlite_validation) {
@@ -253,6 +286,9 @@ int run_generate(int argc, char* argv[]) {
     benchmark_report.sqlite_validation_status = schemaforge::SQLiteValidationStatus::Skipped;
     if (generation_config.output_format == "csv" && generation_config.sqlite_validation) {
       std::cout << "\nSQLite validation skipped for CSV output.\n";
+    } else if (generation_config.output_format == "postgres_copy" &&
+               generation_config.sqlite_validation) {
+      std::cout << "\nSQLite validation skipped for PostgreSQL COPY output.\n";
     }
   }
 

@@ -31,6 +31,12 @@ struct GeneratedRow {
   std::vector<GeneratedValue> values;
 };
 
+struct GenerationStreamConsumer {
+  std::function<void(const Table&)> table_started;
+  std::function<void(const GeneratedRow&)> row_generated;
+  std::function<void(const Table&)> table_finished;
+};
+
 class GenerationPlan {
  private:
   static std::vector<ColumnData> generate_columns_data(
@@ -48,6 +54,9 @@ class GenerationPlan {
   static void stream_table_data(const std::vector<TablePtr>& tables,
                                 const GenerationConfig& config,
                                 const std::function<void(const GeneratedRow&)>& row_consumer);
+  static void stream_table_data(const std::vector<TablePtr>& tables,
+                                const GenerationConfig& config,
+                                const GenerationStreamConsumer& consumer);
 };
 
 std::ostream& operator<<(std::ostream& os, const ColumnData& column_data);

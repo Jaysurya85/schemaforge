@@ -99,6 +99,32 @@ formats as SQL output.
 SQLite validation is skipped for CSV because the current validator executes SQL statements. The
 benchmark still reports rows, throughput, memory, and the combined size of all generated CSV files.
 
+### PostgreSQL COPY Output
+
+Use `postgres_copy` to create one self-contained data file for `psql`:
+
+```yaml
+output:
+  format: postgres_copy
+  file: output.copy.sql
+```
+
+Generate and import it with:
+
+```bash
+./build/schemaforge generate --config schemaforge.yaml
+psql --dbname your_database --file output.copy.sql
+```
+
+The target tables must already exist. The generated file wraps all tables in one transaction and
+emits `COPY ... FROM STDIN` blocks in foreign-key dependency order. Rows use PostgreSQL text COPY
+format: fields are tab-separated, NULL is `\N`, and backslashes and control characters are escaped.
+Table and column identifiers are double-quoted.
+
+PostgreSQL COPY output streams rows directly to one file and retains deterministic seed behavior.
+SQLite validation is skipped because COPY syntax is PostgreSQL-specific; benchmark rows,
+throughput, memory, and output size are still reported.
+
 ## Tests
 
 ```bash
@@ -155,6 +181,7 @@ database; the other two cases disable SQLite so their memory figures focus on ge
 - Supports simple `CHECK` constraints for numeric ranges, `BETWEEN`, numeric `IN`, and text `IN`.
 - Optionally validates generated SQL in SQLite.
 - Streams one headered CSV file per table with typed value formatting and CSV escaping.
+- Streams transactional PostgreSQL `COPY FROM STDIN` output for high-throughput imports.
 - Writes benchmark metrics for generated rows, generation time, throughput, output file size,
   validation time, total command time, and Linux peak process memory usage.
 - Includes a complex marketplace test fixture for multi-table generation.

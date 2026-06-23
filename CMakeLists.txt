@@ -31,6 +31,7 @@ add_executable(schemaforge
     src/generator/TextGenerator.cpp
     src/io/FileReader.cpp
     src/output/CsvWriter.cpp
+    src/output/PostgresCopyWriter.cpp
     src/output/SqlInsertWriter.cpp
 )
 

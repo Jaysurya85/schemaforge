@@ -546,6 +546,125 @@ run_csv_missing_directory() {
   fi
 }
 
+configure_postgres_copy_output() {
+  local config_file="$1"
+  local output_file="$2"
+  local benchmark_file="$3"
+
+  perl -0pi -e "s#file: output\.sql#file: ${output_file}#" "${config_file}"
+  perl -0pi -e 's/format: sql/format: postgres_copy/' "${config_file}"
+  perl -0pi -e "s#file: benchmark\.yaml#file: ${benchmark_file}#" "${config_file}"
+}
+
+postgres_copy_fk_values_valid() {
+  local output_file="$1"
+  awk -F '\t' '
+    /^COPY "users" / { section = "users"; next }
+    /^COPY "orders" / { section = "orders"; next }
+    /^\\\.$/ { section = ""; next }
+    section == "users" { ids[$1] = 1; next }
+    section == "orders" && !($2 in ids) { exit 1 }
+  ' "${output_file}"
+}
+
+run_postgres_copy_single_fk() {
+  local name="valid/postgres_copy_single_fk"
+  local config_file="${TMP_DIR}/postgres_copy_single_fk.yaml"
+  local first_output="${TMP_DIR}/postgres_copy_single_fk_a.sql"
+  local second_output="${TMP_DIR}/postgres_copy_single_fk_b.sql"
+  local first_benchmark="${TMP_DIR}/postgres_copy_single_fk_a_benchmark.yaml"
+  local second_benchmark="${TMP_DIR}/postgres_copy_single_fk_b_benchmark.yaml"
+  local log_file="${TMP_DIR}/postgres_copy_single_fk.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  configure_postgres_copy_output "${config_file}" "${first_output}" "${first_benchmark}"
+
+  if ! "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  perl -0pi -e "s#file: ${first_output}#file: ${second_output}#" "${config_file}"
+  perl -0pi -e "s#file: ${first_benchmark}#file: ${second_benchmark}#" "${config_file}"
+  if "${BINARY}" generate --config "${config_file}" >>"${log_file}" 2>&1 &&
+      [[ "$(head -n 1 "${first_output}")" == "BEGIN;" ]] &&
+      [[ "$(tail -n 1 "${first_output}")" == "COMMIT;" ]] &&
+      grep -q '^COPY "users" ("id", "name", "email") FROM STDIN WITH (FORMAT text);$' \
+        "${first_output}" &&
+      grep -q '^COPY "orders" ("id", "user_id") FROM STDIN WITH (FORMAT text);$' \
+        "${first_output}" &&
+      [[ "$(grep -c '^\\\.$' "${first_output}")" -eq 2 ]] &&
+      postgres_copy_fk_values_valid "${first_output}" &&
+      cmp -s "${first_output}" "${second_output}" &&
+      grep -q "SQLite validation skipped for PostgreSQL COPY output" "${log_file}" &&
+      grep -q "sqlite: skipped" "${first_benchmark}" &&
+      benchmark_metrics_valid "${first_output}" "${first_benchmark}" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_postgres_copy_composite_fk() {
+  local name="valid/postgres_copy_composite_fk"
+  local config_file="${TMP_DIR}/postgres_copy_composite_fk.yaml"
+  local output_file="${TMP_DIR}/postgres_copy_composite_fk.sql"
+  local benchmark_file="${TMP_DIR}/postgres_copy_composite_fk_benchmark.yaml"
+  local log_file="${TMP_DIR}/postgres_copy_composite_fk.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/composite_fk_primary_key/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  configure_postgres_copy_output "${config_file}" "${output_file}" "${benchmark_file}"
+  perl -0pi -e 's/(memberships:\n\s+rows: )\d+/${1}4/' "${config_file}"
+  perl -0pi -e 's/(membership_events:\n\s+rows: )\d+/${1}4/' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      awk -F '\t' '
+        /^COPY "memberships" / { section = "parent"; next }
+        /^COPY "membership_events" / { section = "child"; next }
+        /^\\\.$/ { section = ""; next }
+        section == "parent" { keys[$1 SUBSEP $2] = 1; next }
+        section == "child" && !(($2 SUBSEP $3) in keys) { exit 1 }
+      ' "${output_file}" &&
+      benchmark_metrics_valid "${output_file}" "${benchmark_file}" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_postgres_copy_zero_rows() {
+  local name="valid/postgres_copy_zero_rows"
+  local config_file="${TMP_DIR}/postgres_copy_zero_rows.yaml"
+  local output_file="${TMP_DIR}/postgres_copy_zero_rows.sql"
+  local benchmark_file="${TMP_DIR}/postgres_copy_zero_rows_benchmark.yaml"
+  local log_file="${TMP_DIR}/postgres_copy_zero_rows.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  configure_postgres_copy_output "${config_file}" "${output_file}" "${benchmark_file}"
+  perl -0pi -e 's/(rows: )\d+/${1}0/g' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      [[ "$(grep -c '^COPY ' "${output_file}")" -eq 2 ]] &&
+      [[ "$(grep -c '^\\\.$' "${output_file}")" -eq 2 ]] &&
+      [[ "$(wc -l <"${output_file}")" -eq 6 ]]; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 run_csv_literal_formatting() {
   local name="unit/csv_literal_formatting"
   local source_file="${TMP_DIR}/csv_literal_formatting.cpp"
@@ -642,6 +761,99 @@ EOF
   fi
 
   if "${binary_file}" "${unsafe_directory}" >"${log_file}" 2>&1; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_postgres_copy_literal_formatting() {
+  local name="unit/postgres_copy_literal_formatting"
+  local source_file="${TMP_DIR}/postgres_copy_literal_formatting.cpp"
+  local binary_file="${TMP_DIR}/postgres_copy_literal_formatting"
+  local log_file="${TMP_DIR}/postgres_copy_literal_formatting.log"
+
+  cat >"${source_file}" <<'EOF'
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "schemaforge/output/PostgresCopyWriter.h"
+#include "schemaforge/schema/Column.h"
+#include "schemaforge/schema/Table.h"
+
+int main() {
+  using namespace schemaforge;
+
+  std::vector<ColumnPtr> columns;
+  columns.push_back(std::make_unique<Column>("id", ColumnType{.data_type = DataType::INT}));
+  columns.push_back(std::make_unique<Column>("odd\"column", ColumnType{.data_type = DataType::TEXT}));
+  columns.push_back(std::make_unique<Column>("empty_text", ColumnType{.data_type = DataType::TEXT}));
+  columns.push_back(std::make_unique<Column>("missing", ColumnType{.data_type = DataType::TEXT}));
+  columns.push_back(std::make_unique<Column>("active", ColumnType{.data_type = DataType::BOOLEAN}));
+  columns.push_back(std::make_unique<Column>("amount", ColumnType{.data_type = DataType::DECIMAL}));
+  columns.push_back(std::make_unique<Column>("born_on", ColumnType{.data_type = DataType::DATE}));
+  columns.push_back(std::make_unique<Column>("alarm", ColumnType{.data_type = DataType::TIME}));
+  columns.push_back(
+      std::make_unique<Column>("starts_at", ColumnType{.data_type = DataType::DATETIME}));
+
+  std::vector<const Column*> row_columns;
+  for (const auto& column : columns) {
+    row_columns.push_back(column.get());
+  }
+  Table table("odd\"table", std::move(columns), {}, {}, {});
+  GeneratedRow row{
+      .table = &table,
+      .columns = std::move(row_columns),
+      .values = {
+          GeneratedValue::integer(7),
+          GeneratedValue::text(
+              "slash\\ tab\t line\n carriage\r back\b form\f vertical\v null\\N end\\."),
+          GeneratedValue::text(""), GeneratedValue::null(), GeneratedValue::boolean(true),
+          GeneratedValue::numeric(12.5), GeneratedValue::date(DateValue{2026, 1, 1}),
+          GeneratedValue::time(TimeValue{12, 30, 0}),
+          GeneratedValue::date_time(
+              DateTimeValue{DateValue{2026, 1, 1}, TimeValue{12, 30, 0}}),
+      },
+  };
+
+  std::ostringstream output;
+  PostgresCopyWriter writer(output);
+  writer.begin_table(table);
+  writer.write_row(row);
+  writer.end_table(table);
+  writer.close();
+
+  const std::string expected =
+      "BEGIN;\n"
+      "COPY \"odd\"\"table\" (\"id\", \"odd\"\"column\", \"empty_text\", \"missing\", "
+      "\"active\", \"amount\", \"born_on\", \"alarm\", \"starts_at\") FROM STDIN WITH "
+      "(FORMAT text);\n"
+      "7\tslash\\\\ tab\\t line\\n carriage\\r back\\b form\\f vertical\\v null\\\\N "
+      "end\\\\.\t\t\\N\ttrue\t12.50\t2026-01-01\t12:30:00\t2026-01-01 12:30:00\n"
+      "\\.\n"
+      "COMMIT;\n";
+  if (output.str() != expected) {
+    std::cerr << "Expected:\n" << expected << "Actual:\n" << output.str();
+    return 1;
+  }
+  return 0;
+}
+EOF
+
+  if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
+      "${source_file}" \
+      "${ROOT_DIR}/src/output/PostgresCopyWriter.cpp" \
+      "${ROOT_DIR}/src/schema/Column.cpp" \
+      "${ROOT_DIR}/src/schema/Table.cpp" \
+      -o "${binary_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+
+  if "${binary_file}" >"${log_file}" 2>&1; then
     record_pass "${name}"
   else
     record_fail "${name}" "${log_file}"
@@ -1097,6 +1309,10 @@ run_csv_composite_fk
 run_csv_zero_rows
 run_csv_missing_directory
 run_csv_literal_formatting
+run_postgres_copy_single_fk
+run_postgres_copy_composite_fk
+run_postgres_copy_zero_rows
+run_postgres_copy_literal_formatting
 run_sql_literal_formatting
 run_key_registry_pattern_sources
 run_key_registry_composite_primary_key

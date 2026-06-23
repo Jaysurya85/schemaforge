@@ -704,6 +704,15 @@ std::vector<TableData> GenerationPlan::generate_table_data(
 void GenerationPlan::stream_table_data(
     const std::vector<TablePtr>& tables, const GenerationConfig& config,
     const std::function<void(const GeneratedRow&)>& row_consumer) {
+  stream_table_data(tables, config,
+                    GenerationStreamConsumer{.table_started = {},
+                                             .row_generated = row_consumer,
+                                             .table_finished = {}});
+}
+
+void GenerationPlan::stream_table_data(const std::vector<TablePtr>& tables,
+                                       const GenerationConfig& config,
+                                       const GenerationStreamConsumer& consumer) {
   RandomEngine random_engine(config.seed);
   const KeyRegistry key_registry = KeyRegistry::build_from_tables(tables, config);
 
@@ -715,6 +724,10 @@ void GenerationPlan::stream_table_data(
                                "'");
     }
 
+    if (consumer.table_started) {
+      consumer.table_started(*table);
+    }
+
     GeneratedRow row_layout{.table = table, .columns = {}, .values = {}};
     row_layout.columns.reserve(table->get_columns().size());
     for (const auto& column_ptr : table->get_columns()) {
@@ -724,9 +737,15 @@ void GenerationPlan::stream_table_data(
     const auto composite_assignments =
         make_composite_assignments(*table, num_rows, config, key_registry, row_layout);
     for (int row_index = 0; row_index < num_rows; ++row_index) {
-      row_consumer(generate_streaming_row(*table, num_rows, static_cast<std::size_t>(row_index),
-                                          config, random_engine, key_registry,
-                                          composite_assignments));
+      if (consumer.row_generated) {
+        consumer.row_generated(generate_streaming_row(
+            *table, num_rows, static_cast<std::size_t>(row_index), config, random_engine,
+            key_registry, composite_assignments));
+      }
+    }
+
+    if (consumer.table_finished) {
+      consumer.table_finished(*table);
     }
   }
 }
