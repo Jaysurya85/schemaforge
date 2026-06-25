@@ -56,9 +56,17 @@ Generate SQL INSERT statements from the config:
 ./build/schemaforge generate --config schemaforge.yaml
 ```
 
-The generated config stores the schema path, seed, default row count, output file, benchmark file,
-SQLite validation setting, and per-table row counts. Edit `schemaforge.yaml` before running
-`generate` to change table row counts or output settings.
+The generated config stores the schema path, SQL dialect, seed, default row count, output file,
+benchmark file, validation settings, and per-table row counts. Edit `schemaforge.yaml` before
+running `generate` to change table row counts or output settings.
+
+```yaml
+schema: schema.sql
+dialect: sqlite
+```
+
+Supported dialects are `sqlite` and `postgres`. SQL INSERT output uses standard single-quote string
+escaping, `true`/`false` booleans, and double-quoted identifiers for both dialects.
 
 ### Column Controls and Realistic Data
 
@@ -143,9 +151,12 @@ benchmark still reports rows, throughput, memory, and the combined size of all g
 Use `postgres_copy` to create one self-contained data file for `psql`:
 
 ```yaml
+dialect: postgres
 output:
   format: postgres_copy
   file: output.copy.sql
+validation:
+  sqlite: false
 ```
 
 Generate and import it with:
@@ -160,15 +171,17 @@ emits `COPY ... FROM STDIN` blocks in foreign-key dependency order. Rows use Pos
 format: fields are tab-separated, NULL is `\N`, and backslashes and control characters are escaped.
 Table and column identifiers are double-quoted.
 
-PostgreSQL COPY output streams rows directly to one file and retains deterministic seed behavior.
-SQLite validation is skipped because COPY syntax is PostgreSQL-specific; benchmark rows,
-throughput, memory, and output size are still reported.
+PostgreSQL COPY output is only allowed with `dialect: postgres`. It streams rows directly to one
+file and retains deterministic seed behavior. SQLite validation is skipped because COPY syntax is
+PostgreSQL-specific; benchmark rows, throughput, memory, and output size are still reported.
 
 ### PostgreSQL Docker Validation
 
-PostgreSQL validation is opt-in for CSV and `postgres_copy` output:
+PostgreSQL validation is selected by `dialect: postgres` and can be enabled for SQL INSERT, CSV,
+and `postgres_copy` output:
 
 ```yaml
+dialect: postgres
 validation:
   sqlite: false
   postgres: true

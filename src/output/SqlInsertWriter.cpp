@@ -40,6 +40,22 @@ std::string format_time(const TimeValue& value) {
 
 }  // namespace
 
+std::string SqlInsertWriter::quote_identifier(const std::string& identifier, SqlDialect dialect) {
+  (void)dialect;
+  std::string quoted;
+  quoted.reserve(identifier.size() + 2);
+  quoted.push_back('"');
+  for (const char character : identifier) {
+    if (character == '"') {
+      quoted += "\"\"";
+      continue;
+    }
+    quoted.push_back(character);
+  }
+  quoted.push_back('"');
+  return quoted;
+}
+
 std::string SqlInsertWriter::escape_sql_string(const std::string& value) {
   std::string escaped;
   escaped.reserve(value.size());
@@ -72,15 +88,16 @@ std::string SqlInsertWriter::format_value(const Column& column, const GeneratedV
   });
 }
 
-std::string SqlInsertWriter::write_row(const TableData& table_data, std::size_t row_index) {
+std::string SqlInsertWriter::write_row(const TableData& table_data, std::size_t row_index,
+                                       SqlDialect dialect) {
   std::ostringstream output;
 
-  output << "INSERT INTO " << table_data.table->get_table_name() << " (";
+  output << "INSERT INTO " << quote_identifier(table_data.table->get_table_name(), dialect) << " (";
   for (std::size_t column_index = 0; column_index < table_data.columns.size(); ++column_index) {
     if (column_index > 0) {
       output << ", ";
     }
-    output << table_data.columns[column_index].column->get_column_name();
+    output << quote_identifier(table_data.columns[column_index].column->get_column_name(), dialect);
   }
 
   output << ") VALUES (";
@@ -97,15 +114,15 @@ std::string SqlInsertWriter::write_row(const TableData& table_data, std::size_t 
   return output.str();
 }
 
-std::string SqlInsertWriter::write_row(const GeneratedRow& row) {
+std::string SqlInsertWriter::write_row(const GeneratedRow& row, SqlDialect dialect) {
   std::ostringstream output;
 
-  output << "INSERT INTO " << row.table->get_table_name() << " (";
+  output << "INSERT INTO " << quote_identifier(row.table->get_table_name(), dialect) << " (";
   for (std::size_t column_index = 0; column_index < row.columns.size(); ++column_index) {
     if (column_index > 0) {
       output << ", ";
     }
-    output << row.columns[column_index]->get_column_name();
+    output << quote_identifier(row.columns[column_index]->get_column_name(), dialect);
   }
 
   output << ") VALUES (";
@@ -121,10 +138,20 @@ std::string SqlInsertWriter::write_row(const GeneratedRow& row) {
 }
 
 void SqlInsertWriter::write_row(std::ostream& output, const GeneratedRow& row) {
-  output << write_row(row) << '\n';
+  write_row(output, row, SqlDialect::SQLite);
+}
+
+void SqlInsertWriter::write_row(std::ostream& output, const GeneratedRow& row,
+                                SqlDialect dialect) {
+  output << write_row(row, dialect) << '\n';
 }
 
 std::vector<std::string> SqlInsertWriter::write_inserts(const std::vector<TableData>& tables) {
+  return write_inserts(tables, SqlDialect::SQLite);
+}
+
+std::vector<std::string> SqlInsertWriter::write_inserts(const std::vector<TableData>& tables,
+                                                        SqlDialect dialect) {
   std::vector<std::string> inserts;
 
   for (const auto& table_data : tables) {
@@ -136,7 +163,7 @@ std::vector<std::string> SqlInsertWriter::write_inserts(const std::vector<TableD
     inserts.reserve(inserts.size() + row_count);
 
     for (std::size_t row_index = 0; row_index < row_count; ++row_index) {
-      inserts.push_back(write_row(table_data, row_index));
+      inserts.push_back(write_row(table_data, row_index, dialect));
     }
   }
 

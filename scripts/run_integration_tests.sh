@@ -552,6 +552,8 @@ configure_postgres_copy_output() {
   local benchmark_file="$3"
 
   perl -0pi -e "s#file: output\.sql#file: ${output_file}#" "${config_file}"
+  perl -0pi -e 's/(dialect: )sqlite/${1}postgres/' "${config_file}"
+  perl -0pi -e 's/(sqlite: )true/${1}false/' "${config_file}"
   perl -0pi -e 's/format: sql/format: postgres_copy/' "${config_file}"
   perl -0pi -e "s#file: benchmark\.yaml#file: ${benchmark_file}#" "${config_file}"
 }
@@ -600,7 +602,7 @@ run_postgres_copy_single_fk() {
       [[ "$(grep -c '^\\\.$' "${first_output}")" -eq 2 ]] &&
       postgres_copy_fk_values_valid "${first_output}" &&
       cmp -s "${first_output}" "${second_output}" &&
-      grep -q "SQLite validation skipped for PostgreSQL COPY output" "${log_file}" &&
+      grep -q "SQLite validation skipped for PostgreSQL dialect" "${log_file}" &&
       grep -q "sqlite: skipped" "${first_benchmark}" &&
       benchmark_metrics_valid "${first_output}" "${first_benchmark}" "${log_file}"; then
     record_pass "${name}"
@@ -711,7 +713,7 @@ run_postgres_validation_requires_supported_output() {
     record_fail "${name}" "${log_file}"
     return
   fi
-  if grep -q "PostgreSQL validation requires CSV or postgres_copy output" "${log_file}"; then
+  if grep -q "PostgreSQL validation requires dialect: postgres" "${log_file}"; then
     record_pass "${name}"
   else
     record_fail "${name}" "${log_file}"
@@ -974,7 +976,8 @@ int main() {
 
   const auto inserts = SqlInsertWriter::write_inserts({table_data});
   const std::string expected =
-      "INSERT INTO samples (id, amount, name, active, born_on, alarm, starts_at) VALUES "
+      "INSERT INTO \"samples\" (\"id\", \"amount\", \"name\", \"active\", \"born_on\", "
+      "\"alarm\", \"starts_at\") VALUES "
       "(7, 12.50, 'owner''s sample', true, '2026-01-01', '12:30:00', "
       "'2026-01-01 12:30:00');";
 
@@ -1357,6 +1360,54 @@ run_realistic_config() {
   fi
 }
 
+run_unsupported_dialect() {
+  local name="invalid/unsupported_dialect"
+  local config_file="${TMP_DIR}/unsupported_dialect.yaml"
+  local log_file="${TMP_DIR}/unsupported_dialect.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e 's/(dialect: )sqlite/${1}mysql/' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  if grep -q "Unsupported SQL dialect: mysql" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_sqlite_postgres_copy_rejected() {
+  local name="invalid/sqlite_postgres_copy"
+  local config_file="${TMP_DIR}/sqlite_postgres_copy.yaml"
+  local output_file="${TMP_DIR}/sqlite_postgres_copy.sql"
+  local log_file="${TMP_DIR}/sqlite_postgres_copy.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e "s#file: output\.sql#file: ${output_file}#" "${config_file}"
+  perl -0pi -e 's/format: sql/format: postgres_copy/' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  if grep -q "postgres_copy output requires dialect: postgres" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 run_heuristic_columns() {
   local name="valid/heuristic_columns"
   local config_file="${TMP_DIR}/heuristic_columns.yaml"
@@ -1384,7 +1435,7 @@ run_heuristic_columns() {
       cmp -s "${first_output}" "${second_output}" &&
       grep -q "VALUES (1, 'email_1@example.com', 'first_name_1', 'last_name_1', 'user_1', '555-000-0001', 10.50, 10.50, 'active', 'queued', '2026-01-01 00:00:00', true, NULL);" "${first_output}" &&
       grep -q "VALUES (2, 'email_2@example.com', 'first_name_2', 'last_name_2', 'user_2', '555-000-0002', 20.50, 20.50, 'inactive', 'done', '2026-01-01 00:00:01', false, NULL);" "${first_output}" &&
-      grep -q "INSERT INTO typed_precedence (id, email) VALUES (1, 1);" "${first_output}" &&
+      grep -q 'INSERT INTO "typed_precedence" ("id", "email") VALUES (1, 1);' "${first_output}" &&
       grep -q "SQLite Validation Result: Valid" "${log_file}"; then
     record_pass "${name}"
   else
@@ -1598,9 +1649,9 @@ require_artifact_contains "valid/composite_unique_fk_output_first" "${ARTIFACT_D
 require_artifact_contains "valid/composite_unique_fk_output_nested" "${ARTIFACT_DIR}/valid_composite_unique_fk.sql" \
   "VALUES (2, 1, 2);"
 require_artifact_contains "valid/composite_fk_primary_key_output" "${ARTIFACT_DIR}/valid_composite_fk_primary_key.sql" \
-  "INSERT INTO membership_events (id, user_id, team_id) VALUES (2, 2, 1);"
+  'INSERT INTO "membership_events" ("id", "user_id", "team_id") VALUES (2, 2, 1);'
 require_artifact_contains "valid/composite_fk_unique_output" "${ARTIFACT_DIR}/valid_composite_fk_unique.sql" \
-  "INSERT INTO offices (id, country_code, region_code) VALUES (2, 2, 1);"
+  'INSERT INTO "offices" ("id", "country_code", "region_code") VALUES (2, 2, 1);'
 
 run_invalid "invalid/missing_fk_table" "tests/invalid/missing_fk_table/schema.sql" "Referenced table 'users' not found"
 run_invalid "invalid/missing_fk_column" "tests/invalid/missing_fk_column/schema.sql" "Referenced column 'user_id' not found"
@@ -1636,6 +1687,8 @@ run_invalid "invalid/multiple_errors" "tests/invalid/multiple_errors/schema.sql"
 run_config_unknown_table
 run_missing_schema_path
 run_missing_schema_file
+run_unsupported_dialect
+run_sqlite_postgres_copy_rejected
 run_invalid_column_config
 
 echo

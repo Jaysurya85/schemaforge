@@ -271,7 +271,14 @@ PostgresDockerValidationResult PostgresDockerValidator::validate(
     return failed("PostgreSQL schema compatibility validation failed", process);
   }
 
-  if (config.output_format == "postgres_copy") {
+  if (config.output_format == "sql") {
+    process = run_process(
+        {"docker", "cp", config.output_file, container + ":/tmp/generated.sql"});
+    if (process.exit_code != 0) {
+      return failed("Failed to copy SQL output into container", process);
+    }
+    process = run_psql_file(container, "/tmp/generated.sql");
+  } else if (config.output_format == "postgres_copy") {
     process = run_process(
         {"docker", "cp", config.output_file, container + ":/tmp/generated.copy.sql"});
     if (process.exit_code != 0) {
@@ -308,7 +315,7 @@ PostgresDockerValidationResult PostgresDockerValidator::validate(
     process = run_psql_file(container, "/tmp/load-csv.sql");
   } else {
     return {PostgresDockerValidationStatus::Failed,
-            {"PostgreSQL Docker validation supports CSV and postgres_copy output"}};
+            {"PostgreSQL Docker validation supports SQL, CSV, and postgres_copy output"}};
   }
 
   if (process.exit_code != 0) {

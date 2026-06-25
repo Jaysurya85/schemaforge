@@ -158,6 +158,11 @@ int run_generate(int argc, char* argv[]) {
     std::cerr << "Unsupported output format: " << generation_config.output_format << '\n';
     return 1;
   }
+  if (generation_config.output_format == "postgres_copy" &&
+      generation_config.dialect != schemaforge::SqlDialect::Postgres) {
+    std::cerr << "postgres_copy output requires dialect: postgres\n";
+    return 1;
+  }
 
   SchemaAnalysis analysis = analyze_schema(generation_config.schema_path, false);
   if (analysis.table_order.empty()) {
@@ -194,8 +199,9 @@ int run_generate(int argc, char* argv[]) {
 
       schemaforge::GenerationPlan::stream_table_data(
           analysis.sorted_tables, generation_config,
-          [&output_file](const schemaforge::GeneratedRow& row) {
-            schemaforge::SqlInsertWriter::write_row(output_file, row);
+          [&output_file, &generation_config](const schemaforge::GeneratedRow& row) {
+            schemaforge::SqlInsertWriter::write_row(output_file, row,
+                                                    generation_config.dialect);
           });
       output_file.close();
       if (!output_file) {
@@ -262,7 +268,8 @@ int run_generate(int argc, char* argv[]) {
     std::cout << "Wrote PostgreSQL COPY data to " << generation_config.output_file << '\n';
   }
 
-  if (generation_config.output_format == "sql" && generation_config.sqlite_validation) {
+  if (generation_config.dialect == schemaforge::SqlDialect::SQLite &&
+      generation_config.output_format == "sql" && generation_config.sqlite_validation) {
     const auto validation_start = std::chrono::steady_clock::now();
     schemaforge::ValidationResult sqlite_validation_result =
         schemaforge::ValidationRunner::validate_sqlite_file(analysis.sql,
@@ -285,7 +292,9 @@ int run_generate(int argc, char* argv[]) {
     }
   } else {
     benchmark_report.sqlite_validation_status = schemaforge::SQLiteValidationStatus::Skipped;
-    if (generation_config.output_format == "csv" && generation_config.sqlite_validation) {
+    if (generation_config.dialect == schemaforge::SqlDialect::Postgres) {
+      std::cout << "\nSQLite validation skipped for PostgreSQL dialect.\n";
+    } else if (generation_config.output_format == "csv" && generation_config.sqlite_validation) {
       std::cout << "\nSQLite validation skipped for CSV output.\n";
     } else if (generation_config.output_format == "postgres_copy" &&
                generation_config.sqlite_validation) {

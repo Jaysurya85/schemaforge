@@ -12,6 +12,26 @@ namespace schemaforge {
 
 namespace {
 
+std::string dialect_to_string(SqlDialect dialect) {
+  switch (dialect) {
+    case SqlDialect::SQLite:
+      return "sqlite";
+    case SqlDialect::Postgres:
+      return "postgres";
+  }
+  return "sqlite";
+}
+
+std::optional<SqlDialect> parse_dialect(const std::string& value) {
+  if (value == "sqlite") {
+    return SqlDialect::SQLite;
+  }
+  if (value == "postgres") {
+    return SqlDialect::Postgres;
+  }
+  return std::nullopt;
+}
+
 GeneratedValue yaml_scalar_value(const YAML::Node& node) {
   const std::string value = node.as<std::string>();
   const std::string tag = node.Tag();
@@ -62,6 +82,7 @@ GenerationConfig GenerationConfig::make_default() {
   generation_config.default_num_rows = 10;
   generation_config.seed = 42;
   generation_config.realistic = false;
+  generation_config.dialect = SqlDialect::SQLite;
   generation_config.schema_path = "schema.sql";
   generation_config.output_file = "output.sql";
   generation_config.output_directory = "";
@@ -196,11 +217,16 @@ bool GenerationConfig::apply_option(const std::string& option, const std::string
   return false;
 }
 
+std::string GenerationConfig::dialect_name() const {
+  return dialect_to_string(dialect);
+}
+
 void GenerationConfig::write_context_file(const std::vector<std::string>& table_order,
                                           const std::string& path) const {
   YAML::Emitter yaml;
   yaml << YAML::BeginMap;
   yaml << YAML::Key << "schema" << YAML::Value << schema_path;
+  yaml << YAML::Key << "dialect" << YAML::Value << dialect_name();
   yaml << YAML::Key << "generation";
   yaml << YAML::Value << YAML::BeginMap;
   yaml << YAML::Key << "seed" << YAML::Value << seed;
@@ -289,6 +315,19 @@ bool GenerationConfig::read_context_file(const std::string& path) {
     }
 
     schema_path = config["schema"].as<std::string>();
+    if (config["dialect"]) {
+      const std::string dialect_value = config["dialect"].as<std::string>();
+      const auto parsed_dialect = parse_dialect(dialect_value);
+      if (!parsed_dialect.has_value()) {
+        std::cerr << "Unsupported SQL dialect: " << dialect_value << '\n';
+        return false;
+      }
+      dialect = parsed_dialect.value();
+      if (dialect == SqlDialect::Postgres) {
+        sqlite_validation = false;
+        postgres_validation = true;
+      }
+    }
 
     const YAML::Node generation_node = config["generation"];
     if (generation_node["seed"]) {
@@ -328,9 +367,22 @@ bool GenerationConfig::read_context_file(const std::string& path) {
       postgres_validation = config["validation"]["postgres"].as<bool>();
     }
 
-    if (postgres_validation && output_format != "csv" && output_format != "postgres_copy") {
-      std::cerr << "Invalid config file: PostgreSQL validation requires CSV or postgres_copy "
+    if (postgres_validation && output_format != "sql" && output_format != "csv" &&
+        output_format != "postgres_copy") {
+      std::cerr << "Invalid config file: PostgreSQL validation requires SQL, CSV, or postgres_copy "
                    "output.\n";
+      return false;
+    }
+    if (output_format == "postgres_copy" && dialect != SqlDialect::Postgres) {
+      std::cerr << "Invalid config file: postgres_copy output requires dialect: postgres.\n";
+      return false;
+    }
+    if (dialect == SqlDialect::SQLite && postgres_validation) {
+      std::cerr << "Invalid config file: PostgreSQL validation requires dialect: postgres.\n";
+      return false;
+    }
+    if (dialect == SqlDialect::Postgres && sqlite_validation) {
+      std::cerr << "Invalid config file: SQLite validation requires dialect: sqlite.\n";
       return false;
     }
 
