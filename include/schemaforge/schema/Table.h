@@ -56,13 +56,25 @@ struct ForeignKey {
 enum class CheckConstraintType : std::uint8_t {
   Range,
   AllowedValues,
+  ColumnComparison,
   Unsupported
+};
+
+enum class CheckComparisonOperator : std::uint8_t {
+  LessThan,
+  LessEqual,
+  GreaterThan,
+  GreaterEqual,
+  Equal
 };
 
 struct ColumnCheckConstraint {
   CheckConstraintType type{CheckConstraintType::Unsupported};
   Column* column{nullptr};
+  Column* right_column{nullptr};
   std::string column_name;
+  std::string right_column_name;
+  CheckComparisonOperator comparison_operator{CheckComparisonOperator::Equal};
   std::optional<double> min_value;
   std::optional<double> max_value;
   bool min_inclusive{true};

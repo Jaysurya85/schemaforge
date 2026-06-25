@@ -1,6 +1,7 @@
 #include "schemaforge/generator/GenerationPlan.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <sstream>
@@ -181,6 +182,149 @@ DateValue date_at(int row_index) {
 
 TimeValue time_at(int seconds) {
   return TimeValue{.hour = seconds / 3600, .minute = (seconds % 3600) / 60, .second = seconds % 60};
+}
+
+int days_from_civil(const DateValue& value) {
+  using namespace std::chrono;
+  const sys_days sys_day =
+      sys_days{year{value.year} / month{static_cast<unsigned int>(value.month)} /
+               day{static_cast<unsigned int>(value.day)}};
+  return static_cast<int>((sys_day - sys_days{year{1970} / January / 1}).count());
+}
+
+DateValue date_from_civil_days(int days_after_1970) {
+  using namespace std::chrono;
+  const sys_days sys_day = sys_days{year{1970} / January / 1} + days{days_after_1970};
+  const year_month_day calendar{sys_day};
+  return DateValue{.year = static_cast<int>(calendar.year()),
+                   .month = static_cast<int>(static_cast<unsigned int>(calendar.month())),
+                   .day = static_cast<int>(static_cast<unsigned int>(calendar.day()))};
+}
+
+int seconds_from_time(const TimeValue& value) {
+  return value.hour * 3600 + value.minute * 60 + value.second;
+}
+
+std::optional<double> numeric_value(const GeneratedValue& value) {
+  return value.visit([](const auto& typed_value) -> std::optional<double> {
+    using ValueType = std::decay_t<decltype(typed_value)>;
+    if constexpr (std::is_same_v<ValueType, std::int64_t> ||
+                  std::is_same_v<ValueType, double>) {
+      return static_cast<double>(typed_value);
+    }
+    return std::nullopt;
+  });
+}
+
+std::optional<std::int64_t> comparable_scalar(const GeneratedValue& value, DataType data_type) {
+  if (ColumnDomainResolver::is_integer_type(data_type) ||
+      ColumnDomainResolver::is_decimal_type(data_type)) {
+    const auto numeric = numeric_value(value);
+    if (numeric.has_value()) {
+      return static_cast<std::int64_t>(std::round(numeric.value() * 100.0));
+    }
+    return std::nullopt;
+  }
+
+  return value.visit([data_type](const auto& typed_value) -> std::optional<std::int64_t> {
+    using ValueType = std::decay_t<decltype(typed_value)>;
+    if constexpr (std::is_same_v<ValueType, DateValue>) {
+      if (data_type == DataType::DATE) {
+        return static_cast<std::int64_t>(days_from_civil(typed_value));
+      }
+    } else if constexpr (std::is_same_v<ValueType, TimeValue>) {
+      if (data_type == DataType::TIME) {
+        return static_cast<std::int64_t>(seconds_from_time(typed_value));
+      }
+    } else if constexpr (std::is_same_v<ValueType, DateTimeValue>) {
+      if (data_type == DataType::DATETIME) {
+        return static_cast<std::int64_t>(days_from_civil(typed_value.date)) * 86400 +
+               seconds_from_time(typed_value.time);
+      }
+    } else if constexpr (std::is_same_v<ValueType, bool>) {
+      if (data_type == DataType::BOOLEAN) {
+        return typed_value ? 1 : 0;
+      }
+    }
+    return std::nullopt;
+  });
+}
+
+bool comparison_satisfied(std::int64_t left, std::int64_t right,
+                          CheckComparisonOperator comparison_operator) {
+  switch (comparison_operator) {
+    case CheckComparisonOperator::LessThan:
+      return left < right;
+    case CheckComparisonOperator::LessEqual:
+      return left <= right;
+    case CheckComparisonOperator::GreaterThan:
+      return left > right;
+    case CheckComparisonOperator::GreaterEqual:
+      return left >= right;
+    case CheckComparisonOperator::Equal:
+      return left == right;
+  }
+  return false;
+}
+
+std::int64_t target_scalar_for_right(std::int64_t left,
+                                     CheckComparisonOperator comparison_operator,
+                                     std::int64_t step) {
+  switch (comparison_operator) {
+    case CheckComparisonOperator::LessThan:
+      return left + step;
+    case CheckComparisonOperator::LessEqual:
+    case CheckComparisonOperator::Equal:
+    case CheckComparisonOperator::GreaterEqual:
+      return left;
+    case CheckComparisonOperator::GreaterThan:
+      return left - step;
+  }
+  return left;
+}
+
+GeneratedValue value_from_scalar_for_column(std::int64_t scalar, const Column& column) {
+  const DataType data_type = column.get_column_type().data_type;
+  if (ColumnDomainResolver::is_integer_type(data_type)) {
+    return GeneratedValue::integer(scalar / 100);
+  }
+  if (ColumnDomainResolver::is_decimal_type(data_type)) {
+    return GeneratedValue::numeric(static_cast<double>(scalar) / 100.0);
+  }
+  if (data_type == DataType::DATE) {
+    return GeneratedValue::date(date_from_civil_days(static_cast<int>(scalar)));
+  }
+  if (data_type == DataType::TIME) {
+    int seconds = static_cast<int>(scalar % 86400);
+    if (seconds < 0) {
+      seconds += 86400;
+    }
+    return GeneratedValue::time(time_at(seconds));
+  }
+  if (data_type == DataType::DATETIME) {
+    const auto days = static_cast<int>(scalar / 86400);
+    int seconds = static_cast<int>(scalar % 86400);
+    if (seconds < 0) {
+      seconds += 86400;
+    }
+    return GeneratedValue::date_time(
+        DateTimeValue{.date = date_from_civil_days(days), .time = time_at(seconds)});
+  }
+  if (data_type == DataType::BOOLEAN) {
+    return GeneratedValue::boolean(scalar != 0);
+  }
+  throw std::runtime_error("Unsupported CHECK comparison column '" + column.get_column_name() + "'");
+}
+
+std::int64_t comparison_step_for_column(const Column& column) {
+  const DataType data_type = column.get_column_type().data_type;
+  if (ColumnDomainResolver::is_integer_type(data_type)) {
+    return 100;
+  }
+  if (ColumnDomainResolver::is_decimal_type(data_type)) {
+    return 1;
+  }
+  return 1;
 }
 
 GeneratedValue generated_value_by_type(const Column& column, std::size_t row_index) {
@@ -682,6 +826,60 @@ void apply_composite_assignments_to_row(const std::vector<CompositeAssignment>& 
   }
 }
 
+void enforce_check_comparison(const ColumnCheckConstraint& check, const Column& left_column,
+                              const GeneratedValue& left_value, const Column& right_column,
+                              GeneratedValue& right_value) {
+  const auto left_scalar = comparable_scalar(left_value, left_column.get_column_type().data_type);
+  const auto right_scalar = comparable_scalar(right_value, right_column.get_column_type().data_type);
+  if (!left_scalar.has_value() || !right_scalar.has_value()) {
+    return;
+  }
+  if (comparison_satisfied(left_scalar.value(), right_scalar.value(),
+                           check.comparison_operator)) {
+    return;
+  }
+
+  const std::int64_t target = target_scalar_for_right(
+      left_scalar.value(), check.comparison_operator, comparison_step_for_column(right_column));
+  right_value = value_from_scalar_for_column(target, right_column);
+}
+
+void apply_check_comparisons_to_row(const Table& table, GeneratedRow& row) {
+  for (const auto& check : table.get_check_constraints()) {
+    if (check.type != CheckConstraintType::ColumnComparison || check.column == nullptr ||
+        check.right_column == nullptr) {
+      continue;
+    }
+    const std::size_t left_index =
+        column_index_or_throw(row, check.column, "CHECK constraint on table '" +
+                                                     table.get_table_name() + "'");
+    const std::size_t right_index =
+        column_index_or_throw(row, check.right_column, "CHECK constraint on table '" +
+                                                           table.get_table_name() + "'");
+    enforce_check_comparison(check, *check.column, row.values[left_index], *check.right_column,
+                             row.values[right_index]);
+  }
+}
+
+void apply_check_comparisons_to_columns(const Table& table, std::vector<ColumnData>& columns) {
+  for (const auto& check : table.get_check_constraints()) {
+    if (check.type != CheckConstraintType::ColumnComparison || check.column == nullptr ||
+        check.right_column == nullptr) {
+      continue;
+    }
+    ColumnData* left = find_column_data(columns, check.column);
+    ColumnData* right = find_column_data(columns, check.right_column);
+    if (left == nullptr || right == nullptr) {
+      continue;
+    }
+    const std::size_t row_count = std::min(left->data.size(), right->data.size());
+    for (std::size_t row = 0; row < row_count; ++row) {
+      enforce_check_comparison(check, *check.column, left->data[row], *check.right_column,
+                               right->data[row]);
+    }
+  }
+}
+
 GeneratedRow generate_streaming_row(const Table& table, int num_rows, std::size_t row_index,
                                     const GenerationConfig& config, RandomEngine& random_engine,
                                     const KeyRegistry& key_registry,
@@ -700,6 +898,7 @@ GeneratedRow generate_streaming_row(const Table& table, int num_rows, std::size_
 
   apply_composite_foreign_keys_to_row(table, row, row_index, config, random_engine, key_registry);
   apply_composite_assignments_to_row(assignments, row_index, row);
+  apply_check_comparisons_to_row(table, row);
   return row;
 }
 
@@ -721,6 +920,7 @@ std::vector<ColumnData> GenerationPlan::generate_columns_data(const Table& table
   }
   apply_composite_foreign_keys(table, num_rows, random_engine, key_registry, column_data);
   apply_composite_key_constraints(table, num_rows, config, key_registry, column_data);
+  apply_check_comparisons_to_columns(table, column_data);
   return column_data;
 }
 

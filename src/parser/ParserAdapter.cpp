@@ -168,6 +168,98 @@ std::vector<std::string> split_top_level(const std::string& value, char delimite
   return parts;
 }
 
+bool keyword_at(const std::string& value, std::size_t position, const std::string& keyword) {
+  if (position + keyword.size() > value.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < keyword.size(); ++index) {
+    if (std::toupper(static_cast<unsigned char>(value[position + index])) !=
+        std::toupper(static_cast<unsigned char>(keyword[index]))) {
+      return false;
+    }
+  }
+  const bool starts_word = position == 0 || !is_word_character(value[position - 1]);
+  const std::size_t after_keyword = position + keyword.size();
+  const bool ends_word = after_keyword >= value.size() || !is_word_character(value[after_keyword]);
+  return starts_word && ends_word;
+}
+
+bool contains_top_level_keyword(const std::string& value, const std::string& keyword) {
+  int parenthesis_depth = 0;
+  bool in_string = false;
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    const char character = value[index];
+    if (character == '\'') {
+      in_string = !in_string;
+    }
+    if (in_string) {
+      continue;
+    }
+    if (character == '(') {
+      parenthesis_depth++;
+      continue;
+    }
+    if (character == ')' && parenthesis_depth > 0) {
+      parenthesis_depth--;
+      continue;
+    }
+    if (parenthesis_depth == 0 && keyword_at(value, index, keyword)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<std::string> split_top_level_and(const std::string& value) {
+  std::vector<std::string> parts;
+  std::string current;
+  int parenthesis_depth = 0;
+  bool in_string = false;
+  bool waiting_for_between_and = false;
+
+  for (std::size_t index = 0; index < value.size();) {
+    const char character = value[index];
+    if (character == '\'') {
+      in_string = !in_string;
+      current += character;
+      index++;
+      continue;
+    }
+
+    if (!in_string) {
+      if (character == '(') {
+        parenthesis_depth++;
+      } else if (character == ')' && parenthesis_depth > 0) {
+        parenthesis_depth--;
+      }
+
+      if (parenthesis_depth == 0 && keyword_at(value, index, "BETWEEN")) {
+        waiting_for_between_and = true;
+      }
+
+      if (parenthesis_depth == 0 && keyword_at(value, index, "AND")) {
+        if (waiting_for_between_and) {
+          waiting_for_between_and = false;
+        } else {
+          parts.push_back(trim(current));
+          current.clear();
+          index += 3;
+          continue;
+        }
+      }
+    }
+
+    current += character;
+    index++;
+  }
+
+  const std::string final_part = trim(current);
+  if (!final_part.empty()) {
+    parts.push_back(final_part);
+  }
+  return parts;
+}
+
 std::optional<double> parse_number(const std::string& value) {
   try {
     std::size_t parsed = 0;
@@ -210,8 +302,27 @@ std::string first_identifier(const std::string& expression) {
   return "";
 }
 
-ColumnCheckConstraint parse_check_expression(const std::string& expression,
-                                             const std::string& raw_sql) {
+std::optional<CheckComparisonOperator> parse_comparison_operator(const std::string& op) {
+  if (op == "<") {
+    return CheckComparisonOperator::LessThan;
+  }
+  if (op == "<=") {
+    return CheckComparisonOperator::LessEqual;
+  }
+  if (op == ">") {
+    return CheckComparisonOperator::GreaterThan;
+  }
+  if (op == ">=") {
+    return CheckComparisonOperator::GreaterEqual;
+  }
+  if (op == "=") {
+    return CheckComparisonOperator::Equal;
+  }
+  return std::nullopt;
+}
+
+ColumnCheckConstraint parse_single_check_expression(const std::string& expression,
+                                                    const std::string& raw_sql) {
   ColumnCheckConstraint check;
   check.expression = trim(expression);
   check.raw_sql = raw_sql;
@@ -276,7 +387,56 @@ ColumnCheckConstraint parse_check_expression(const std::string& expression,
     return check;
   }
 
+  const std::regex boolean_equality_pattern(
+      R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(true|false)\s*$)",
+      std::regex_constants::icase);
+  if (std::regex_match(check.expression, match, boolean_equality_pattern)) {
+    check.type = CheckConstraintType::AllowedValues;
+    check.column_name = match[1].str();
+    check.allowed_values.push_back(
+        GeneratedValue::boolean(uppercase(match[2].str()) == "TRUE"));
+    return check;
+  }
+
+  const std::regex column_comparison_pattern(
+      R"(^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(>=|<=|=|>|<)\s*([A-Za-z_][A-Za-z0-9_]*)\s*$)",
+      std::regex_constants::icase);
+  if (std::regex_match(check.expression, match, column_comparison_pattern)) {
+    const auto comparison_operator = parse_comparison_operator(match[2].str());
+    if (comparison_operator.has_value()) {
+      check.type = CheckConstraintType::ColumnComparison;
+      check.column_name = match[1].str();
+      check.right_column_name = match[3].str();
+      check.comparison_operator = comparison_operator.value();
+      return check;
+    }
+  }
+
   return check;
+}
+
+std::vector<ColumnCheckConstraint> parse_check_expression(const std::string& expression,
+                                                         const std::string& raw_sql) {
+  const std::string trimmed_expression = trim(expression);
+  if (contains_top_level_keyword(trimmed_expression, "OR")) {
+    ColumnCheckConstraint check;
+    check.expression = trimmed_expression;
+    check.raw_sql = raw_sql;
+    check.column_name = first_identifier(trimmed_expression);
+    return {check};
+  }
+
+  const auto parts = split_top_level_and(trimmed_expression);
+  if (parts.size() <= 1) {
+    return {parse_single_check_expression(trimmed_expression, raw_sql)};
+  }
+
+  std::vector<ColumnCheckConstraint> checks;
+  checks.reserve(parts.size());
+  for (const auto& part : parts) {
+    checks.push_back(parse_single_check_expression(part, raw_sql));
+  }
+  return checks;
 }
 
 std::size_t find_keyword(const std::string& value, const std::string& keyword, std::size_t start) {
@@ -409,11 +569,12 @@ std::string strip_inline_checks(const std::string& definition, const std::string
     stripped += definition.substr(cursor, check_position - cursor);
     const std::string raw_sql =
         definition.substr(check_position, check_clause->second - check_position);
-    ColumnCheckConstraint check = parse_check_expression(check_clause->first, raw_sql);
-    if (check.column_name.empty()) {
-      check.column_name = column_name;
+    for (auto check : parse_check_expression(check_clause->first, raw_sql)) {
+      if (check.column_name.empty()) {
+        check.column_name = column_name;
+      }
+      checks.push_back(std::move(check));
     }
-    checks.push_back(std::move(check));
     cursor = check_clause->second;
   }
 
@@ -431,7 +592,9 @@ std::string remove_check_constraints_from_table_body(
     if (leading_word == "CHECK") {
       auto check_clause = extract_check_clause(trimmed_definition, 0);
       if (check_clause.has_value()) {
-        checks.push_back(parse_check_expression(check_clause->first, trimmed_definition));
+        for (auto check : parse_check_expression(check_clause->first, trimmed_definition)) {
+          checks.push_back(std::move(check));
+        }
       }
       continue;
     }
@@ -441,9 +604,11 @@ std::string remove_check_constraints_from_table_body(
       if (check_position != std::string::npos) {
         auto check_clause = extract_check_clause(trimmed_definition, check_position);
         if (check_clause.has_value()) {
-          checks.push_back(parse_check_expression(
-              check_clause->first,
-              trimmed_definition.substr(check_position, check_clause->second - check_position)));
+          const std::string raw_sql =
+              trimmed_definition.substr(check_position, check_clause->second - check_position);
+          for (auto check : parse_check_expression(check_clause->first, raw_sql)) {
+            checks.push_back(std::move(check));
+          }
         }
         continue;
       }
@@ -774,6 +939,9 @@ Table ParserAdapter::convert_create_statement(
     checks = checks_it->second;
     for (auto& check : checks) {
       check.column = find_column_by_name(check.column_name, columns);
+      if (!check.right_column_name.empty()) {
+        check.right_column = find_column_by_name(check.right_column_name, columns);
+      }
     }
   }
 

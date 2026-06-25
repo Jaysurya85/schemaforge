@@ -529,7 +529,10 @@ void check_unsupported_check_constraints(const std::vector<TablePtr>& tables,
                                          ValidationResult& validation_result) {
   for (const auto& table_ptr : tables) {
     for (const auto& check : table_ptr->get_check_constraints()) {
-      if (check.type == CheckConstraintType::Unsupported || check.column == nullptr) {
+      if (check.type == CheckConstraintType::Unsupported ||
+          ((check.type == CheckConstraintType::Range ||
+            check.type == CheckConstraintType::AllowedValues) &&
+           check.column == nullptr)) {
         const std::string column_name =
             check.column_name.empty() ? "<unknown>" : check.column_name;
         validation_result.errors.push_back("Unsupported CHECK constraint on " +
@@ -614,6 +617,73 @@ bool column_has_key_constraint(const Table* table, const Column* column) {
             constraint.type == ConstraintType::Unique) &&
            contains_column(constraint.columns, column);
   });
+}
+
+bool is_boolean_allowed_values_check(const ColumnCheckConstraint& check) {
+  if (check.type != CheckConstraintType::AllowedValues || check.allowed_values.empty()) {
+    return false;
+  }
+  return std::ranges::any_of(check.allowed_values, [](const GeneratedValue& value) {
+    return value.visit([](const auto& typed_value) {
+      using ValueType = std::decay_t<decltype(typed_value)>;
+      return std::is_same_v<ValueType, bool>;
+    });
+  });
+}
+
+bool comparable_check_types(DataType left, DataType right, CheckComparisonOperator op) {
+  const bool both_integer =
+      ColumnDomainResolver::is_integer_type(left) && ColumnDomainResolver::is_integer_type(right);
+  const bool both_decimal =
+      ColumnDomainResolver::is_decimal_type(left) && ColumnDomainResolver::is_decimal_type(right);
+  const bool both_numeric =
+      (ColumnDomainResolver::is_integer_type(left) || ColumnDomainResolver::is_decimal_type(left)) &&
+      (ColumnDomainResolver::is_integer_type(right) || ColumnDomainResolver::is_decimal_type(right));
+  if (both_integer || both_decimal || (both_numeric && op != CheckComparisonOperator::Equal)) {
+    return true;
+  }
+  return left == right &&
+         (left == DataType::DATE || left == DataType::DATETIME || left == DataType::TIME ||
+          (left == DataType::BOOLEAN && op == CheckComparisonOperator::Equal));
+}
+
+void check_advanced_check_constraints(const std::vector<TablePtr>& tables,
+                                      ValidationResult& validation_result) {
+  for (const auto& table_ptr : tables) {
+    const Table* table = table_ptr.get();
+    for (const auto& check : table->get_check_constraints()) {
+      if (is_boolean_allowed_values_check(check) && check.column != nullptr &&
+          check.column->get_column_type().data_type != DataType::BOOLEAN) {
+        validation_result.errors.push_back("Boolean CHECK equality requires BOOLEAN column '" +
+                                           table->get_table_name() + "." + check.column_name + "'");
+      }
+
+      if (check.type != CheckConstraintType::ColumnComparison) {
+        continue;
+      }
+
+      if (check.column == nullptr || check.right_column == nullptr) {
+        validation_result.errors.push_back("CHECK comparison references unknown column on table '" +
+                                           table->get_table_name() + "': " + check.raw_sql);
+        continue;
+      }
+
+      const DataType left_type = check.column->get_column_type().data_type;
+      const DataType right_type = check.right_column->get_column_type().data_type;
+      if (!comparable_check_types(left_type, right_type, check.comparison_operator)) {
+        validation_result.errors.push_back("Unsupported CHECK column comparison on table '" +
+                                           table->get_table_name() + "': " + check.raw_sql);
+      }
+
+      if (column_has_key_constraint(table, check.right_column) ||
+          local_foreign_key(table, check.right_column) != nullptr) {
+        validation_result.errors.push_back(
+            "CHECK column comparison cannot adjust key or foreign key column '" +
+            table->get_table_name() + "." + check.right_column->get_column_name() + "': " +
+            check.raw_sql);
+      }
+    }
+  }
 }
 
 std::optional<double> numeric_value(const GeneratedValue& value) {
@@ -997,6 +1067,7 @@ ValidationResult ValidationRunner::validate_schema(const std::vector<TablePtr>& 
       check_self_reference_unsupported,
       check_unsupported_generation_type,
       check_unsupported_check_constraints,
+      check_advanced_check_constraints,
       check_unsupported_pk_fk_generation_type,
   };
 
