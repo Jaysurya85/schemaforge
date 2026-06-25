@@ -296,6 +296,14 @@ scripts/run_integration_tests.sh
 
 Valid test outputs and benchmark reports are written to `tests/artifacts/`.
 
+## Final Demo And Architecture
+
+For a compact portfolio/demo run covering SQL, CSV, PostgreSQL COPY, validation, deterministic
+output, constraints, foreign-key ordering, composite keys, and benchmark reporting, see
+`examples/final_demo/`.
+
+For the internal pipeline and design rationale, see `docs/architecture.md`.
+
 ## Large-Scale Benchmarks
 
 Build SchemaForge, then run all benchmark examples from the repository root:

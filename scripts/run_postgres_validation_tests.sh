@@ -22,7 +22,9 @@ run_copy_validation() {
   "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" --config "${config}" \
     >"${log}" 2>&1
   perl -0pi -e "s#file: output\.sql#file: ${output}#" "${config}"
+  perl -0pi -e 's/(dialect: )sqlite/${1}postgres/' "${config}"
   perl -0pi -e 's/format: sql/format: postgres_copy/' "${config}"
+  perl -0pi -e 's/(sqlite: )true/${1}false/' "${config}"
   perl -0pi -e 's/(postgres: )false/${1}true/' "${config}"
   perl -0pi -e "s#file: benchmark\.yaml#file: ${benchmark}#" "${config}"
 
@@ -46,6 +48,8 @@ run_csv_validation() {
     >"${log}" 2>&1
   perl -0pi -e "s#  file: output\.sql\n  format: sql#  directory: ${output_directory}\n  format: csv#" \
     "${config}"
+  perl -0pi -e 's/(dialect: )sqlite/${1}postgres/' "${config}"
+  perl -0pi -e 's/(sqlite: )true/${1}false/' "${config}"
   perl -0pi -e 's/(postgres: )false/${1}true/' "${config}"
   perl -0pi -e "s#file: benchmark\.yaml#file: ${benchmark}#" "${config}"
 

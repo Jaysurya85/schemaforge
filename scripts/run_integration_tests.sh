@@ -425,6 +425,195 @@ run_benchmark_unknown_case() {
   fi
 }
 
+first_line_number() {
+  local pattern="$1"
+  local file="$2"
+  grep -n "${pattern}" "${file}" | head -n 1 | cut -d: -f1
+}
+
+final_demo_order_valid() {
+  local output_file="$1"
+  local users_line
+  local products_line
+  local orders_line
+  local order_items_line
+  local payments_line
+
+  users_line="$(first_line_number 'INSERT INTO "users"' "${output_file}")"
+  products_line="$(first_line_number 'INSERT INTO "products"' "${output_file}")"
+  orders_line="$(first_line_number 'INSERT INTO "orders"' "${output_file}")"
+  order_items_line="$(first_line_number 'INSERT INTO "order_items"' "${output_file}")"
+  payments_line="$(first_line_number 'INSERT INTO "payments"' "${output_file}")"
+
+  [[ -n "${users_line}" && -n "${products_line}" && -n "${orders_line}" &&
+      -n "${order_items_line}" && -n "${payments_line}" ]] &&
+    [[ "${users_line}" -lt "${products_line}" ]] &&
+    [[ "${products_line}" -lt "${order_items_line}" ]] &&
+    [[ "${orders_line}" -lt "${order_items_line}" ]] &&
+    [[ "${orders_line}" -lt "${payments_line}" ]]
+}
+
+final_demo_expected_sample_valid() {
+  local output_file="$1"
+  local sample_file="${ROOT_DIR}/examples/final_demo/expected_output_sample.sql"
+  local sample_line
+
+  while IFS= read -r sample_line; do
+    [[ -z "${sample_line}" || "${sample_line}" == --* ]] && continue
+    if ! grep -Fq "${sample_line}" "${output_file}"; then
+      return 1
+    fi
+  done <"${sample_file}"
+}
+
+run_final_demo_sql_smoke() {
+  local name="demo/final_sql"
+  local config_file="${TMP_DIR}/final_demo_sql.yaml"
+  local output_file="${ARTIFACT_DIR}/final_demo.sql"
+  local benchmark_file="${ARTIFACT_DIR}/final_demo_benchmark.yaml"
+  local log_file="${TMP_DIR}/final_demo_sql.log"
+
+  cp "${ROOT_DIR}/examples/final_demo/schemaforge.yaml" "${config_file}"
+  perl -0pi -e "s#file: examples/final_demo/output\.sql#file: ${output_file}#" "${config_file}"
+  perl -0pi -e "s#file: examples/final_demo/benchmark\.yaml#file: ${benchmark_file}#" \
+    "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      grep -q "SQLite Validation Result: Valid" "${log_file}" &&
+      grep -q "Total rows generated: 37" "${log_file}" &&
+      grep -q "total_rows: 37" "${benchmark_file}" &&
+      grep -q "sqlite: passed" "${benchmark_file}" &&
+      grep -q "throughput_rows_per_second:" "${benchmark_file}" &&
+      benchmark_metrics_valid "${output_file}" "${benchmark_file}" "${log_file}" &&
+      [[ -s "${output_file}" ]] &&
+      final_demo_order_valid "${output_file}" &&
+      final_demo_expected_sample_valid "${output_file}" &&
+      grep -q "coupon_code.*NULL" "${output_file}" &&
+      grep -q "external_reference.*NULL" "${output_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_final_demo_csv_smoke() {
+  local name="demo/final_csv"
+  local config_file="${TMP_DIR}/final_demo_csv.yaml"
+  local output_directory="${TMP_DIR}/final-demo-csv"
+  local benchmark_file="${TMP_DIR}/final_demo_csv_benchmark.yaml"
+  local log_file="${TMP_DIR}/final_demo_csv.log"
+
+  cp "${ROOT_DIR}/examples/final_demo/schemaforge_csv.yaml" "${config_file}"
+  perl -0pi -e "s#directory: examples/final_demo/csv-output#directory: ${output_directory}#" \
+    "${config_file}"
+  perl -0pi -e "s#file: examples/final_demo/csv-benchmark\.yaml#file: ${benchmark_file}#" \
+    "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      [[ "$(head -n 1 "${output_directory}/users.csv")" == \
+        "id,email,first_name,last_name,status,created_at" ]] &&
+      [[ "$(head -n 1 "${output_directory}/order_items.csv")" == \
+        "order_id,line_number,product_sku,seller_id,quantity,unit_price" ]] &&
+      [[ "$(wc -l <"${output_directory}/users.csv")" -eq 6 ]] &&
+      [[ "$(wc -l <"${output_directory}/order_items.csv")" -eq 11 ]] &&
+      grep -q "total_rows: 37" "${benchmark_file}" &&
+      grep -q "sqlite: skipped" "${benchmark_file}" &&
+      csv_metrics_valid "${benchmark_file}" "${output_directory}/users.csv" \
+        "${output_directory}/products.csv" "${output_directory}/orders.csv" \
+        "${output_directory}/order_items.csv" "${output_directory}/payments.csv"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_final_demo_postgres_copy_smoke() {
+  local name="demo/final_postgres_copy"
+  local config_file="${TMP_DIR}/final_demo_postgres_copy.yaml"
+  local output_file="${TMP_DIR}/final_demo_postgres_copy.sql"
+  local benchmark_file="${TMP_DIR}/final_demo_postgres_copy_benchmark.yaml"
+  local log_file="${TMP_DIR}/final_demo_postgres_copy.log"
+
+  cp "${ROOT_DIR}/examples/final_demo/schemaforge_postgres_copy.yaml" "${config_file}"
+  perl -0pi -e "s#file: examples/final_demo/postgres-copy\.sql#file: ${output_file}#" \
+    "${config_file}"
+  perl -0pi -e "s#file: examples/final_demo/postgres-copy-benchmark\.yaml#file: ${benchmark_file}#" \
+    "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      [[ "$(head -n 1 "${output_file}")" == "BEGIN;" ]] &&
+      [[ "$(tail -n 1 "${output_file}")" == "COMMIT;" ]] &&
+      grep -q '^COPY "users" ' "${output_file}" &&
+      grep -q '^COPY "order_items" ' "${output_file}" &&
+      grep -q "total_rows: 37" "${benchmark_file}" &&
+      grep -q "sqlite: skipped" "${benchmark_file}" &&
+      benchmark_metrics_valid "${output_file}" "${benchmark_file}" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_different_seed_changes_output() {
+  local name="valid/different_seed_changes_output"
+  local config_file="${TMP_DIR}/different_seed.yaml"
+  local first_output="${ARTIFACT_DIR}/different_seed_42.sql"
+  local second_output="${ARTIFACT_DIR}/different_seed_43.sql"
+  local first_benchmark="${ARTIFACT_DIR}/different_seed_42_benchmark.yaml"
+  local second_benchmark="${ARTIFACT_DIR}/different_seed_43_benchmark.yaml"
+  local log_file="${TMP_DIR}/different_seed.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/basic_fk/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e "s#file: output\\.sql#file: ${first_output}#; s#file: benchmark\\.yaml#file: ${first_benchmark}#" "${config_file}"
+
+  if ! "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e "s#file: ${first_output}#file: ${second_output}#; s#file: ${first_benchmark}#file: ${second_benchmark}#; s/(seed: )42/\${1}43/" "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >>"${log_file}" 2>&1 &&
+      ! cmp -s "${first_output}" "${second_output}" &&
+      grep -q "SQLite Validation Result: Valid" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_large_row_streaming_smoke() {
+  local name="valid/large_row_streaming_smoke"
+  local config_file="${TMP_DIR}/large_row_streaming.yaml"
+  local output_file="${ARTIFACT_DIR}/large_row_streaming.sql"
+  local benchmark_file="${ARTIFACT_DIR}/large_row_streaming_benchmark.yaml"
+  local log_file="${TMP_DIR}/large_row_streaming.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/single_table_random_values/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e "s#file: output\\.sql#file: ${output_file}#; s#file: benchmark\\.yaml#file: ${benchmark_file}#" "${config_file}"
+  perl -0pi -e 's/(products:\n\s+rows: )10/${1}2500/' "${config_file}"
+  perl -0pi -e 's/(sqlite: )true/${1}false/' "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      [[ "$(wc -l <"${output_file}")" -eq 2500 ]] &&
+      grep -q "total_rows: 2500" "${benchmark_file}" &&
+      grep -q "sqlite: skipped" "${benchmark_file}" &&
+      grep -q "throughput_rows_per_second:" "${benchmark_file}" &&
+      ! grep -q "Generated table data" "${log_file}" &&
+      benchmark_metrics_valid "${output_file}" "${benchmark_file}" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 configure_csv_output() {
   local config_file="$1"
   local output_directory="$2"
@@ -1571,11 +1760,16 @@ run_valid "valid/composite_unique_fk" "tests/valid/composite_unique_fk/schema.sq
 run_valid "valid/composite_fk_primary_key" "tests/valid/composite_fk_primary_key/schema.sql" --rows memberships=4 --rows membership_events=4
 run_valid "valid/composite_fk_unique" "tests/valid/composite_fk_unique/schema.sql" --rows regions=4 --rows offices=4
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
+run_different_seed_changes_output
 run_heuristic_columns
 run_realistic_config
 run_configured_parent_key
 run_nullable_composite_fk
 run_sqlite_disabled
+run_large_row_streaming_smoke
+run_final_demo_sql_smoke
+run_final_demo_csv_smoke
+run_final_demo_postgres_copy_smoke
 run_benchmark_example_smoke "single_table_1m" "skipped" 10
 run_benchmark_example_smoke "users_orders_1m" "passed" 20
 run_benchmark_example_smoke "ecommerce_large" "skipped" 40
