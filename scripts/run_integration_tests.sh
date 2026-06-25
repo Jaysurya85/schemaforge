@@ -1069,6 +1069,7 @@ EOF
   if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
       "${source_file}" \
       "${ROOT_DIR}/src/generator/KeyRegistry.cpp" \
+      "${ROOT_DIR}/src/generator/RealisticValueGenerator.cpp" \
       "${ROOT_DIR}/src/generator/TextGenerator.cpp" \
       "${ROOT_DIR}/src/domain/ColumnDomainResolver.cpp" \
       "${ROOT_DIR}/src/config/GenerationConfig.cpp" \
@@ -1162,6 +1163,7 @@ EOF
   if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
       "${source_file}" \
       "${ROOT_DIR}/src/generator/KeyRegistry.cpp" \
+      "${ROOT_DIR}/src/generator/RealisticValueGenerator.cpp" \
       "${ROOT_DIR}/src/generator/TextGenerator.cpp" \
       "${ROOT_DIR}/src/domain/ColumnDomainResolver.cpp" \
       "${ROOT_DIR}/src/config/GenerationConfig.cpp" \
@@ -1263,6 +1265,7 @@ EOF
   if ! "${CXX:-c++}" -std=c++20 -I"${ROOT_DIR}/include" \
       "${source_file}" \
       "${ROOT_DIR}/src/generator/KeyRegistry.cpp" \
+      "${ROOT_DIR}/src/generator/RealisticValueGenerator.cpp" \
       "${ROOT_DIR}/src/generator/TextGenerator.cpp" \
       "${ROOT_DIR}/src/domain/ColumnDomainResolver.cpp" \
       "${ROOT_DIR}/src/config/GenerationConfig.cpp" \
@@ -1305,6 +1308,157 @@ require_artifact_contains() {
     fi
   } >"${log_file}"
   record_fail "${name}" "${log_file}"
+}
+
+run_realistic_config() {
+  local name="valid/realistic_config"
+  local config_file="${TMP_DIR}/realistic_config.yaml"
+  local first_output="${ARTIFACT_DIR}/valid_realistic_config_a.sql"
+  local second_output="${ARTIFACT_DIR}/valid_realistic_config_b.sql"
+  local third_output="${ARTIFACT_DIR}/valid_realistic_config_seed_43.sql"
+  local first_benchmark="${ARTIFACT_DIR}/valid_realistic_config_a_benchmark.yaml"
+  local second_benchmark="${ARTIFACT_DIR}/valid_realistic_config_b_benchmark.yaml"
+  local third_benchmark="${ARTIFACT_DIR}/valid_realistic_config_seed_43_benchmark.yaml"
+  local log_file="${TMP_DIR}/realistic_config.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/realistic_config/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e 's/(realistic: )false/${1}true/' "${config_file}"
+  perl -0pi -e 's/(users:\n\s+rows: )10/${1}6\n    columns:\n      age:\n        min: 25\n        max: 30\n      status:\n        values: [active, inactive]\n      middle_name:\n        null_probability: 1.0/' "${config_file}"
+  perl -0pi -e 's/(messages:\n\s+rows: )10/${1}6/' "${config_file}"
+  perl -0pi -e "s#file: output\\.sql#file: ${first_output}#; s#file: benchmark\\.yaml#file: ${first_benchmark}#" "${config_file}"
+
+  if ! "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e "s#file: ${first_output}#file: ${second_output}#; s#file: ${first_benchmark}#file: ${second_benchmark}#" "${config_file}"
+
+  if ! "${BINARY}" generate --config "${config_file}" >>"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e "s#file: ${second_output}#file: ${third_output}#; s#file: ${second_benchmark}#file: ${third_benchmark}#; s/(seed: )42/\${1}43/" "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >>"${log_file}" 2>&1 &&
+      cmp -s "${first_output}" "${second_output}" &&
+      ! cmp -s "${first_output}" "${third_output}" &&
+      grep -Eq "[a-z]+\\.[a-z]+\\+[0-9]+@" "${first_output}" &&
+      grep -q ", 25, 'active', NULL," "${first_output}" &&
+      grep -q "'Phoenix', 'AZ', '85001'" "${first_output}" &&
+      grep -q "SQLite Validation Result: Valid" "${log_file}" &&
+      ! grep -q "first_name_1" "${first_output}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_heuristic_columns() {
+  local name="valid/heuristic_columns"
+  local config_file="${TMP_DIR}/heuristic_columns.yaml"
+  local first_output="${ARTIFACT_DIR}/valid_heuristic_columns_a.sql"
+  local second_output="${ARTIFACT_DIR}/valid_heuristic_columns_b.sql"
+  local first_benchmark="${ARTIFACT_DIR}/valid_heuristic_columns_a_benchmark.yaml"
+  local second_benchmark="${ARTIFACT_DIR}/valid_heuristic_columns_b_benchmark.yaml"
+  local log_file="${TMP_DIR}/heuristic_columns.log"
+
+  if ! "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/heuristic_columns/schema.sql" \
+      --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e 's/(users:\n\s+rows: )10/${1}3\n    columns:\n      optional_phone:\n        null_probability: 1.0/; s/(messages:\n\s+rows: )10/${1}3/; s/(typed_precedence:\n\s+rows: )10/${1}3/' "${config_file}"
+  perl -0pi -e "s#file: output\\.sql#file: ${first_output}#; s#file: benchmark\\.yaml#file: ${first_benchmark}#" "${config_file}"
+
+  if ! "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1; then
+    record_fail "${name}" "${log_file}"
+    return
+  fi
+  perl -0pi -e "s#file: ${first_output}#file: ${second_output}#; s#file: ${first_benchmark}#file: ${second_benchmark}#" "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >>"${log_file}" 2>&1 &&
+      cmp -s "${first_output}" "${second_output}" &&
+      grep -q "VALUES (1, 'email_1@example.com', 'first_name_1', 'last_name_1', 'user_1', '555-000-0001', 10.50, 10.50, 'active', 'queued', '2026-01-01 00:00:00', true, NULL);" "${first_output}" &&
+      grep -q "VALUES (2, 'email_2@example.com', 'first_name_2', 'last_name_2', 'user_2', '555-000-0002', 20.50, 20.50, 'inactive', 'done', '2026-01-01 00:00:01', false, NULL);" "${first_output}" &&
+      grep -q "INSERT INTO typed_precedence (id, email) VALUES (1, 1);" "${first_output}" &&
+      grep -q "SQLite Validation Result: Valid" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_configured_parent_key() {
+  local name="valid/configured_parent_key"
+  local config_file="${TMP_DIR}/configured_parent_key.yaml"
+  local output_file="${ARTIFACT_DIR}/valid_configured_parent_key.sql"
+  local benchmark_file="${ARTIFACT_DIR}/valid_configured_parent_key_benchmark.yaml"
+  local log_file="${TMP_DIR}/configured_parent_key.log"
+
+  "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/realistic_config/schema.sql" \
+    --config "${config_file}" >"${log_file}" 2>&1 || {
+    record_fail "${name}" "${log_file}"; return;
+  }
+  perl -0pi -e 's/(users:\n\s+rows: )10/${1}3\n    columns:\n      email:\n        values: ["001", "002", "003"]/; s/(messages:\n\s+rows: )10/${1}3/' "${config_file}"
+  perl -0pi -e "s#file: output\\.sql#file: ${output_file}#; s#file: benchmark\\.yaml#file: ${benchmark_file}#" "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      grep -q "'001'" "${output_file}" &&
+      grep -q "'002'" "${output_file}" &&
+      grep -q "'003'" "${output_file}" &&
+      grep -q "SQLite Validation Result: Valid" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_nullable_composite_fk() {
+  local name="valid/nullable_composite_fk"
+  local config_file="${TMP_DIR}/nullable_composite_fk.yaml"
+  local output_file="${ARTIFACT_DIR}/valid_nullable_composite_fk.sql"
+  local benchmark_file="${ARTIFACT_DIR}/valid_nullable_composite_fk_benchmark.yaml"
+  local log_file="${TMP_DIR}/nullable_composite_fk.log"
+
+  "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/composite_fk_primary_key/schema.sql" \
+    --config "${config_file}" >"${log_file}" 2>&1 || {
+    record_fail "${name}" "${log_file}"; return;
+  }
+  perl -0pi -e 's/(memberships:\n\s+rows: )10/${1}4/; s/(membership_events:\n\s+rows: )10/${1}4\n    columns:\n      user_id:\n        null_probability: 1.0/' "${config_file}"
+  perl -0pi -e "s#file: output\\.sql#file: ${output_file}#; s#file: benchmark\\.yaml#file: ${benchmark_file}#" "${config_file}"
+
+  if "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      [[ "$(grep -c 'membership_events.*NULL, NULL' "${output_file}")" -eq 4 ]] &&
+      grep -q "SQLite Validation Result: Valid" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
+run_invalid_column_config() {
+  local name="invalid/column_config"
+  local config_file="${TMP_DIR}/invalid_column_config.yaml"
+  local log_file="${TMP_DIR}/invalid_column_config.log"
+
+  "${BINARY}" init --schema "${ROOT_DIR}/tests/valid/realistic_config/schema.sql" \
+    --config "${config_file}" >"${log_file}" 2>&1 || {
+    record_fail "${name}" "${log_file}"; return;
+  }
+  perl -0pi -e 's/(users:\n\s+rows: 10)/${1}\n    columns:\n      missing:\n        values: [x]\n      age:\n        min: 90\n      id:\n        null_probability: 0.5/' "${config_file}"
+
+  if ! "${BINARY}" generate --config "${config_file}" >"${log_file}" 2>&1 &&
+      grep -q "unknown column 'users.missing'" "${log_file}" &&
+      grep -q "does not overlap SQL CHECK for column 'users.age'" "${log_file}" &&
+      grep -q "null_probability is not allowed for required column 'users.id'" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
 }
 
 cd "${ROOT_DIR}" || exit 1
@@ -1352,6 +1506,10 @@ run_valid "valid/composite_unique_fk" "tests/valid/composite_unique_fk/schema.sq
 run_valid "valid/composite_fk_primary_key" "tests/valid/composite_fk_primary_key/schema.sql" --rows memberships=4 --rows membership_events=4
 run_valid "valid/composite_fk_unique" "tests/valid/composite_fk_unique/schema.sql" --rows regions=4 --rows offices=4
 run_deterministic "valid/deterministic_output" "tests/valid/basic_fk/schema.sql" --seed 42
+run_heuristic_columns
+run_realistic_config
+run_configured_parent_key
+run_nullable_composite_fk
 run_sqlite_disabled
 run_benchmark_example_smoke "single_table_1m" "skipped" 10
 run_benchmark_example_smoke "users_orders_1m" "passed" 20
@@ -1474,6 +1632,7 @@ run_invalid "invalid/multiple_errors" "tests/invalid/multiple_errors/schema.sql"
 run_config_unknown_table
 run_missing_schema_path
 run_missing_schema_file
+run_invalid_column_config
 
 echo
 echo "Passed: ${PASSED}"

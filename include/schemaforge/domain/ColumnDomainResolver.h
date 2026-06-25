@@ -35,11 +35,16 @@ class ColumnDomainResolver {
   static int char_capacity(int length);
 
   static GeneratedValue coerce_allowed_value(const GeneratedValue& value, DataType data_type);
+  static std::optional<GeneratedValue> coerce_configured_value(const GeneratedValue& value,
+                                                               DataType data_type);
 
   static EffectiveCheckConstraint effective_check_for_column(const Table* table,
                                                              const Column* column);
   static EffectiveCheckConstraint effective_check_for_column(const Table& table,
                                                              const Column& column);
+  static EffectiveCheckConstraint effective_check_for_column(const Table& table,
+                                                              const Column& column,
+                                                              const GenerationConfig& config);
 
   static ColumnDomain domain_for_column(const Table* table, const Column* column,
                                         const GenerationConfig& config, int requested_rows);

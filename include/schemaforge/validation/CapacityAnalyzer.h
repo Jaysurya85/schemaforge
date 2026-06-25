@@ -32,7 +32,8 @@ class CapacityAnalyzer {
   static bool has_constraint(const Table* table, const Column* column,
                              ConstraintType constraint_type);
   static std::optional<RowCapacityLimit> column_capacity_limit(const Table* table,
-                                                               const Column* column);
+                                                               const Column* column,
+                                                               const GenerationConfig& config);
   static void apply_capacity_limit(TableCapacityInfo& table_info,
                                    const RowCapacityLimit& capacity_limit);
 

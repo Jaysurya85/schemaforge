@@ -25,6 +25,7 @@ add_executable(schemaforge
     src/domain/ColumnDomainResolver.cpp
     src/generator/GenerationPlan.cpp
     src/generator/KeyRegistry.cpp
+    src/generator/RealisticValueGenerator.cpp
     src/generator/ValueGenerator.cpp
     src/generator/BooleanGenerator.cpp
     src/generator/DecimalGenerator.cpp

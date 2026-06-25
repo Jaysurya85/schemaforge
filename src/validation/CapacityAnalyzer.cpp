@@ -24,7 +24,8 @@ bool CapacityAnalyzer::has_constraint(const Table* table, const Column* column,
   return false;
 }
 
-std::optional<RowCapacityLimit> check_capacity_limit(const Table* table, const Column* column) {
+std::optional<RowCapacityLimit> check_capacity_limit(const Table* table, const Column* column,
+                                                     const GenerationConfig& config) {
   auto has_local_constraint = [table, column](ConstraintType type) {
     for (const auto& constraint : table->get_table_constraints()) {
       if (constraint.type == type && constraint.columns.size() == 1 &&
@@ -40,7 +41,6 @@ std::optional<RowCapacityLimit> check_capacity_limit(const Table* table, const C
     return std::nullopt;
   }
 
-  GenerationConfig config;
   const ColumnDomain domain = ColumnDomainResolver::domain_for_column(table, column, config, 0);
   const std::string qualified_column = table->get_table_name() + "." + column->get_column_name();
   if (!domain.check.allowed_values.empty() && domain.finite_capacity.has_value()) {
@@ -145,8 +145,9 @@ std::optional<RowCapacityLimit> composite_key_capacity_limit(const Table* table,
 }
 
 std::optional<RowCapacityLimit> CapacityAnalyzer::column_capacity_limit(const Table* table,
-                                                                        const Column* column) {
-  auto check_limit = check_capacity_limit(table, column);
+                                                                        const Column* column,
+                                                                        const GenerationConfig& config) {
+  auto check_limit = check_capacity_limit(table, column, config);
   if (check_limit.has_value()) {
     return check_limit;
   }
@@ -204,7 +205,7 @@ SchemaCapacityInfo CapacityAnalyzer::analyze(const std::vector<TablePtr>& tables
                                                     "'"});
 
     for (const auto& column_ptr : table_ptr->get_columns()) {
-      auto column_limit = column_capacity_limit(table_ptr.get(), column_ptr.get());
+      auto column_limit = column_capacity_limit(table_ptr.get(), column_ptr.get(), config);
       if (column_limit.has_value()) {
         apply_capacity_limit(table_info, column_limit.value());
       }

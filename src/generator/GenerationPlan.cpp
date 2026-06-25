@@ -11,6 +11,7 @@
 #include <variant>
 
 #include "schemaforge/domain/ColumnDomainResolver.h"
+#include "schemaforge/generator/RealisticValueGenerator.h"
 #include "schemaforge/generator/ValueGenerator.h"
 
 namespace schemaforge {
@@ -267,6 +268,22 @@ GeneratedValue generated_value_for_check(const Column& column, const EffectiveCh
   return generated_value_by_type(column, row_index);
 }
 
+bool has_effective_domain(const EffectiveCheckConstraint& check) {
+  return !check.allowed_values.empty() || check.min_value.has_value() || check.max_value.has_value();
+}
+
+bool should_generate_null(const Table& table, const Column& column, std::size_t row_index,
+                          const GenerationConfig& config) {
+  const ColumnGenerationConfig* column_config =
+      config.get_column_config(table.get_table_name(), column.get_column_name());
+  if (column_config == nullptr || !column_config->null_probability.has_value()) {
+    return false;
+  }
+  return RealisticValueGenerator::deterministic_fraction(
+             config.seed, table.get_table_name(), "null:" + column.get_column_name(), row_index) <
+         column_config->null_probability.value();
+}
+
 std::string composite_key_name(const TableConstraint& constraint) {
   std::string name = constraint.type == ConstraintType::PrimaryKey ? "PRIMARY KEY(" : "UNIQUE(";
   for (std::size_t index = 0; index < constraint.columns.size(); ++index) {
@@ -464,12 +481,17 @@ std::size_t column_index_or_throw(const GeneratedRow& row, const Column* column,
 
 GeneratedValue generate_base_row_value(const Table& table, const Column& column,
                                        std::size_t row_index, RandomEngine& random_engine,
-                                       const KeyRegistry& key_registry) {
+                                       const KeyRegistry& key_registry,
+                                       const GenerationConfig& config) {
   const DataType data_type = column.get_column_type().data_type;
   if (has_single_column_constraint(table, &column, ConstraintType::PrimaryKey)) {
     std::vector<Column*> key_columns =
         key_columns_for_single_constraint(table, &column, ConstraintType::PrimaryKey);
     return key_registry.key_at_row(&table, key_columns, row_index).front();
+  }
+
+  if (should_generate_null(table, column, row_index, config)) {
+    return GeneratedValue::null();
   }
 
   if (const ForeignKey* foreign_key = find_foreign_key(table, &column); foreign_key != nullptr) {
@@ -492,9 +514,25 @@ GeneratedValue generate_base_row_value(const Table& table, const Column& column,
     }
   }
 
+
+  if (has_single_column_constraint(table, &column, ConstraintType::Unique) &&
+      (ColumnDomainResolver::is_integer_type(data_type) ||
+       ColumnDomainResolver::is_text_type(data_type) || data_type == DataType::CHAR)) {
+    std::vector<Column*> key_columns =
+        key_columns_for_single_constraint(table, &column, ConstraintType::Unique);
+    return key_registry.key_at_row(&table, key_columns, row_index).front();
+  }
+
   const EffectiveCheckConstraint effective_check =
-      ColumnDomainResolver::effective_check_for_column(table, column);
-  return generated_value_for_check(column, effective_check, row_index);
+      ColumnDomainResolver::effective_check_for_column(table, column, config);
+  if (has_effective_domain(effective_check)) {
+    return generated_value_for_check(column, effective_check, row_index);
+  }
+  if (auto realistic = RealisticValueGenerator::generate(table, column, row_index, config);
+      realistic.has_value()) {
+    return realistic.value();
+  }
+  return generated_value_by_type(column, row_index);
 }
 
 std::vector<GeneratedValue> domain_for_streaming_column(const Table& table, const Column* column,
@@ -520,8 +558,17 @@ std::vector<GeneratedValue> domain_for_streaming_column(const Table& table, cons
   values.reserve(static_cast<std::size_t>(std::max(0, num_rows)));
   for (int row = 0; row < num_rows; ++row) {
     const EffectiveCheckConstraint effective_check =
-        ColumnDomainResolver::effective_check_for_column(table, *column);
-    values.push_back(generated_value_for_check(*column, effective_check, static_cast<std::size_t>(row)));
+        ColumnDomainResolver::effective_check_for_column(table, *column, config);
+    if (has_effective_domain(effective_check)) {
+      values.push_back(
+          generated_value_for_check(*column, effective_check, static_cast<std::size_t>(row)));
+    } else if (auto realistic = RealisticValueGenerator::generate(
+                   table, *column, static_cast<std::size_t>(row), config, true);
+               realistic.has_value()) {
+      values.push_back(realistic.value());
+    } else {
+      values.push_back(generated_value_by_type(*column, static_cast<std::size_t>(row)));
+    }
   }
   return distinct_values(values);
 }
@@ -567,6 +614,8 @@ std::vector<CompositeAssignment> make_composite_assignments(const Table& table, 
 }
 
 void apply_composite_foreign_keys_to_row(const Table& table, GeneratedRow& row,
+                                         std::size_t row_index,
+                                         const GenerationConfig& config,
                                          RandomEngine& random_engine,
                                          const KeyRegistry& key_registry) {
   for (const auto& foreign_key : table.get_foreign_keys()) {
@@ -577,6 +626,23 @@ void apply_composite_foreign_keys_to_row(const Table& table, GeneratedRow& row,
     if (foreign_key.local_columns.size() != foreign_key.referenced_columns.size()) {
       throw std::runtime_error("Composite foreign key on table '" + table.get_table_name() +
                                "' has mismatched local and referenced column counts");
+    }
+
+    const auto nullable_column = std::ranges::find_if(
+        foreign_key.local_columns, [&table, &config](const Column* column) {
+          const auto* column_config =
+              config.get_column_config(table.get_table_name(), column->get_column_name());
+          return column_config != nullptr && column_config->null_probability.has_value();
+        });
+    if (nullable_column != foreign_key.local_columns.end() &&
+        should_generate_null(table, **nullable_column, row_index, config)) {
+      for (const Column* local_column : foreign_key.local_columns) {
+        row.values[column_index_or_throw(row, local_column,
+                                         "Composite foreign key on table '" +
+                                             table.get_table_name() + "'")] =
+            GeneratedValue::null();
+      }
+      continue;
     }
 
     const auto parent_key =
@@ -629,10 +695,10 @@ GeneratedRow generate_streaming_row(const Table& table, int num_rows, std::size_
   for (const auto& column_ptr : columns) {
     row.columns.push_back(column_ptr.get());
     row.values.push_back(
-        generate_base_row_value(table, *column_ptr, row_index, random_engine, key_registry));
+        generate_base_row_value(table, *column_ptr, row_index, random_engine, key_registry, config));
   }
 
-  apply_composite_foreign_keys_to_row(table, row, random_engine, key_registry);
+  apply_composite_foreign_keys_to_row(table, row, row_index, config, random_engine, key_registry);
   apply_composite_assignments_to_row(assignments, row_index, row);
   return row;
 }
@@ -673,22 +739,26 @@ std::vector<TableData> GenerationPlan::generate_table_data(const std::vector<Tab
                                                            const GenerationConfig& config) {
   std::vector<TableData> table_data;
   table_data.reserve(tables.size());
-  RandomEngine random_engine(config.seed);
-  const KeyRegistry key_registry = KeyRegistry::build_from_tables(tables, config);
-  for (const auto& table_ptr : tables) {
-    const Table* table = table_ptr.get();
-    const int num_rows = config.get_row_count(table->get_table_name());
-    if (num_rows < 0) {
-      throw std::runtime_error("Row count cannot be negative for table '" + table->get_table_name() +
-                               "'");
-    }
-
-    table_data.push_back(TableData{
-        .table = table,
-        .columns = std::move(generate_columns_data(*table, num_rows, config, random_engine,
-                                                   key_registry))});
-    verify_composite_key_constraints(table_data.back());
-  }
+  stream_table_data(
+      tables, config,
+      GenerationStreamConsumer{
+          .table_started = [&table_data](const Table& table) {
+            TableData data{.table = &table, .columns = {}};
+            data.columns.reserve(table.get_columns().size());
+            for (const auto& column : table.get_columns()) {
+              data.columns.push_back(ColumnData{.column = column.get(), .data = {}});
+            }
+            table_data.push_back(std::move(data));
+          },
+          .row_generated = [&table_data](const GeneratedRow& row) {
+            TableData& data = table_data.back();
+            for (std::size_t index = 0; index < row.values.size(); ++index) {
+              data.columns[index].data.push_back(row.values[index]);
+            }
+          },
+          .table_finished = [&table_data](const Table&) {
+            verify_composite_key_constraints(table_data.back());
+          }});
   return table_data;
 }
 

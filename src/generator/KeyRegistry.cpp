@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "schemaforge/domain/ColumnDomainResolver.h"
+#include "schemaforge/generator/RealisticValueGenerator.h"
 
 namespace schemaforge {
 
@@ -97,10 +98,11 @@ int integer_max_bound(const EffectiveCheckConstraint& check, double default_valu
   return static_cast<int>(std::ceil(value)) - 1;
 }
 
-int domain_size_for_column(const Table* table, const Column* column, int row_count) {
+int domain_size_for_column(const Table* table, const Column* column, int row_count,
+                           const GenerationConfig& config) {
   const DataType data_type = column->get_column_type().data_type;
   const EffectiveCheckConstraint effective_check =
-      ColumnDomainResolver::effective_check_for_column(table, column);
+      ColumnDomainResolver::effective_check_for_column(*table, *column, config);
 
   if (!effective_check.allowed_values.empty()) {
     return static_cast<int>(effective_check.allowed_values.size());
@@ -124,10 +126,11 @@ int domain_size_for_column(const Table* table, const Column* column, int row_cou
 }
 
 GeneratedValue value_for_column_at(const Table* table, const Column* column,
-                                   std::size_t value_index, int row_count) {
+                                   std::size_t value_index, int row_count,
+                                   const GenerationConfig& config) {
   const DataType data_type = column->get_column_type().data_type;
   const EffectiveCheckConstraint effective_check =
-      ColumnDomainResolver::effective_check_for_column(table, column);
+      ColumnDomainResolver::effective_check_for_column(*table, *column, config);
 
   if (!effective_check.allowed_values.empty()) {
     return ColumnDomainResolver::coerce_allowed_value(
@@ -141,6 +144,11 @@ GeneratedValue value_for_column_at(const Table* table, const Column* column,
   }
 
   if (ColumnDomainResolver::is_text_type(data_type)) {
+    if (auto realistic = RealisticValueGenerator::generate(*table, *column, value_index, config,
+                                                            true);
+        realistic.has_value()) {
+      return realistic.value();
+    }
     const std::string column_name = normalize_column_name(column->get_column_name());
     if (is_email_column(column_name)) {
       return GeneratedValue::text(column_name + "_" + std::to_string(value_index + 1) +
@@ -218,7 +226,7 @@ std::vector<GeneratedValue> KeyRegistry::tuple_at_row(const Table* table,
   std::vector<int> domain_sizes;
   domain_sizes.reserve(source.columns.size());
   for (const Column* column : source.columns) {
-    const int domain_size = domain_size_for_column(table, column, source.count);
+    const int domain_size = domain_size_for_column(table, column, source.count, *source.config);
     if (domain_size <= 0) {
       throw std::runtime_error("Composite key source for table '" + key_name(table) +
                                "' has no values for column '" + column->get_column_name() + "'");
@@ -236,7 +244,8 @@ std::vector<GeneratedValue> KeyRegistry::tuple_at_row(const Table* table,
     const std::size_t value_index =
         (row_index / divisor) % static_cast<std::size_t>(domain_sizes[column_index]);
     tuple.push_back(
-        value_for_column_at(table, source.columns[column_index], value_index, source.count));
+        value_for_column_at(table, source.columns[column_index], value_index, source.count,
+                            *source.config));
   }
   return tuple;
 }
@@ -274,13 +283,27 @@ std::vector<GeneratedValue> KeyRegistry::random_key(const Table* table,
           }
           const int offset = random_engine.next_int(0, static_cast<int>(source.values.size()) - 1);
           return {source.values[static_cast<std::size_t>(offset)]};
-        } else {
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(source)>, TupleKeySource>) {
           if (source.count <= 0) {
             throw std::runtime_error("Referenced key source for table '" + key_name(table) +
                                      "' has no values");
           }
           const int offset = random_engine.next_int(0, source.count - 1);
           return tuple_at_row(table, source, static_cast<std::size_t>(offset));
+        } else {
+          if (source.count <= 0) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' has no values");
+          }
+          const int offset = random_engine.next_int(0, source.count - 1);
+          auto value = RealisticValueGenerator::generate(*source.table, *source.column,
+                                                         static_cast<std::size_t>(offset),
+                                                         *source.config, true);
+          if (!value.has_value()) {
+            throw std::runtime_error("Realistic key source has no generator for column '" +
+                                     source.column->get_column_name() + "'");
+          }
+          return {value.value()};
         }
       },
       key_source->second);
@@ -316,12 +339,24 @@ std::vector<GeneratedValue> KeyRegistry::key_at_row(const Table* table,
                                      "' does not have enough values");
           }
           return {source.values[row_index]};
-        } else {
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(source)>, TupleKeySource>) {
           if (row_index >= static_cast<std::size_t>(source.count)) {
             throw std::runtime_error("Referenced key source for table '" + key_name(table) +
                                      "' does not have enough values");
           }
           return tuple_at_row(table, source, row_index);
+        } else {
+          if (row_index >= static_cast<std::size_t>(source.count)) {
+            throw std::runtime_error("Referenced key source for table '" + key_name(table) +
+                                     "' does not have enough values");
+          }
+          auto value = RealisticValueGenerator::generate(*source.table, *source.column, row_index,
+                                                         *source.config, true);
+          if (!value.has_value()) {
+            throw std::runtime_error("Realistic key source has no generator for column '" +
+                                     source.column->get_column_name() + "'");
+          }
+          return {value.value()};
         }
       },
       key_source->second);
@@ -337,7 +372,7 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
     for (const auto& constraint : table->get_table_constraints()) {
       if (is_composite_key_constraint(constraint)) {
         key_registry.key_sources[make_key(table, constraint.columns)] =
-            TupleKeySource{.columns = constraint.columns, .count = row_count};
+            TupleKeySource{.columns = constraint.columns, .count = row_count, .config = &config};
         continue;
       }
 
@@ -348,7 +383,7 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
       const Column* column = constraint.columns.front();
       const DataType data_type = column->get_column_type().data_type;
       const EffectiveCheckConstraint effective_check =
-          ColumnDomainResolver::effective_check_for_column(table, column);
+          ColumnDomainResolver::effective_check_for_column(*table, *column, config);
       if (!effective_check.allowed_values.empty()) {
         std::vector<GeneratedValue> values;
         values.reserve(effective_check.allowed_values.size());
@@ -369,6 +404,13 @@ KeyRegistry KeyRegistry::build_from_tables(const std::vector<TablePtr>& tables,
       }
 
       if (ColumnDomainResolver::is_text_type(data_type)) {
+        if (constraint.type == ConstraintType::Unique &&
+            RealisticValueGenerator::generate(*table, *column, 0, config, true).has_value()) {
+          key_registry.key_sources[make_key(table, constraint.columns)] =
+              RealisticKeySource{.table = table, .column = column, .count = row_count,
+                                 .config = &config};
+          continue;
+        }
         const bool email_column = is_email_column(column->get_column_name());
         const PatternKeyKind kind =
             email_column ? PatternKeyKind::Email

@@ -42,10 +42,19 @@ class KeyRegistry {
   struct TupleKeySource {
     std::vector<Column*> columns;
     int count;
+    const GenerationConfig* config;
+  };
+
+  struct RealisticKeySource {
+    const Table* table;
+    const Column* column;
+    int count;
+    const GenerationConfig* config;
   };
 
   using KeySource =
-      std::variant<IntRangeKeySource, PatternKeySource, AllowedValuesKeySource, TupleKeySource>;
+      std::variant<IntRangeKeySource, PatternKeySource, AllowedValuesKeySource, TupleKeySource,
+                   RealisticKeySource>;
 
   struct KeyRef {
     const Table* table;

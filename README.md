@@ -60,6 +60,45 @@ The generated config stores the schema path, seed, default row count, output fil
 SQLite validation setting, and per-table row counts. Edit `schemaforge.yaml` before running
 `generate` to change table row counts or output settings.
 
+### Column Controls and Realistic Data
+
+Realistic generation is opt-in and uses deterministic built-in `en-US` data. Related fields in a
+row share one profile, so names, email addresses, phone numbers, and city/state/ZIP values remain
+coherent. No external faker library or system clock is used, and the same seed produces the same
+output.
+
+```yaml
+generation:
+  seed: 42
+  default_rows: 100
+  realistic: true
+
+tables:
+  users:
+    rows: 100
+    columns:
+      age:
+        min: 18
+        max: 80
+      status:
+        values: [active, inactive]
+      middle_name:
+        null_probability: 0.4
+```
+
+`min` and `max` apply to numeric columns. `values` accepts YAML scalar values and is converted to
+the target SQL type. `null_probability` must be between `0.0` and `1.0` and may only be used on
+nullable, non-key columns. Nullable single-column foreign keys may be NULL; for composite foreign
+keys, configuring one local column makes the complete tuple NULL together.
+
+Column settings are validated against SQL types and `CHECK` constraints before output is opened.
+Settings on parent `PRIMARY KEY` or `UNIQUE` columns define the registered key source, so child
+foreign keys sample the configured parent values. Local FK columns may only set
+`null_probability`.
+
+When `realistic` is omitted or false, SchemaForge retains the original deterministic placeholder
+format. SQL constraints and explicit column settings take precedence over name-based heuristics.
+
 Useful init options:
 
 ```bash
@@ -202,6 +241,9 @@ database; the other two cases disable SQLite so their memory figures focus on ge
 - Orders tables by foreign-key dependencies before generating rows.
 - Generates deterministic SQL `INSERT` data from a seed.
 - Supports configurable default row counts and per-table row counts.
+- Supports per-column numeric ranges, value lists, and null probabilities.
+- Supports opt-in seeded realistic names, contact details, addresses, commerce values, text, and
+  valid temporal values.
 - Writes an editable YAML config for schema path, output path, benchmark path, SQLite validation,
   default rows, and per-table rows.
 - Generates values for `INT`, `SMALLINT`, `BIGINT`, `TEXT`, `VARCHAR`, `CHAR`, `DECIMAL`,
