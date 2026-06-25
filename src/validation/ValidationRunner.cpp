@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <functional>
 #include <regex>
@@ -9,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <type_traits>
 
 #include "schemaforge/domain/ColumnDomainResolver.h"
 #include "schemaforge/validation/SQLiteValidator.h"
@@ -527,23 +529,15 @@ void check_unsupported_check_constraints(const std::vector<TablePtr>& tables,
                                          ValidationResult& validation_result) {
   for (const auto& table_ptr : tables) {
     for (const auto& check : table_ptr->get_check_constraints()) {
-      if (check.type == CheckConstraintType::Unsupported || check.column == nullptr) {
+      if (check.type == CheckConstraintType::Unsupported ||
+          ((check.type == CheckConstraintType::Range ||
+            check.type == CheckConstraintType::AllowedValues) &&
+           check.column == nullptr)) {
         const std::string column_name =
             check.column_name.empty() ? "<unknown>" : check.column_name;
         validation_result.errors.push_back("Unsupported CHECK constraint on " +
                                            table_ptr->get_table_name() + "." + column_name +
                                            ": " + check.raw_sql);
-      }
-    }
-  }
-}
-
-void check_composite_primary_key_unsupported(const std::vector<TablePtr>& tables,
-                                             ValidationResult& validation_result) {
-  for (const auto& table_ptr : tables) {
-    for (const auto& constraint : table_ptr->get_table_constraints()) {
-      if (constraint.type == ConstraintType::PrimaryKey && constraint.columns.size() > 1) {
-        validation_result.errors.push_back("Composite primary keys are not supported yet");
       }
     }
   }
@@ -598,6 +592,266 @@ void check_config_unknown_table(const std::vector<TablePtr>& tables, const Gener
     (void)row_count;
     if (!table_names.contains(table_name)) {
       validation_result.errors.push_back("Config contains unknown table '" + table_name + "'");
+    }
+  }
+  for (const auto& [table_name, columns] : config.table_column_configs) {
+    (void)columns;
+    if (!table_names.contains(table_name)) {
+      validation_result.errors.push_back("Config contains unknown table '" + table_name + "'");
+    }
+  }
+}
+
+const ForeignKey* local_foreign_key(const Table* table, const Column* column) {
+  for (const auto& foreign_key : table->get_foreign_keys()) {
+    if (contains_column(foreign_key.local_columns, column)) {
+      return &foreign_key;
+    }
+  }
+  return nullptr;
+}
+
+bool column_has_key_constraint(const Table* table, const Column* column) {
+  return std::ranges::any_of(table->get_table_constraints(), [column](const auto& constraint) {
+    return (constraint.type == ConstraintType::PrimaryKey ||
+            constraint.type == ConstraintType::Unique) &&
+           contains_column(constraint.columns, column);
+  });
+}
+
+bool is_boolean_allowed_values_check(const ColumnCheckConstraint& check) {
+  if (check.type != CheckConstraintType::AllowedValues || check.allowed_values.empty()) {
+    return false;
+  }
+  return std::ranges::any_of(check.allowed_values, [](const GeneratedValue& value) {
+    return value.visit([](const auto& typed_value) {
+      using ValueType = std::decay_t<decltype(typed_value)>;
+      return std::is_same_v<ValueType, bool>;
+    });
+  });
+}
+
+bool comparable_check_types(DataType left, DataType right, CheckComparisonOperator op) {
+  const bool both_integer =
+      ColumnDomainResolver::is_integer_type(left) && ColumnDomainResolver::is_integer_type(right);
+  const bool both_decimal =
+      ColumnDomainResolver::is_decimal_type(left) && ColumnDomainResolver::is_decimal_type(right);
+  const bool both_numeric =
+      (ColumnDomainResolver::is_integer_type(left) || ColumnDomainResolver::is_decimal_type(left)) &&
+      (ColumnDomainResolver::is_integer_type(right) || ColumnDomainResolver::is_decimal_type(right));
+  if (both_integer || both_decimal || (both_numeric && op != CheckComparisonOperator::Equal)) {
+    return true;
+  }
+  return left == right &&
+         (left == DataType::DATE || left == DataType::DATETIME || left == DataType::TIME ||
+          (left == DataType::BOOLEAN && op == CheckComparisonOperator::Equal));
+}
+
+void check_advanced_check_constraints(const std::vector<TablePtr>& tables,
+                                      ValidationResult& validation_result) {
+  for (const auto& table_ptr : tables) {
+    const Table* table = table_ptr.get();
+    for (const auto& check : table->get_check_constraints()) {
+      if (is_boolean_allowed_values_check(check) && check.column != nullptr &&
+          check.column->get_column_type().data_type != DataType::BOOLEAN) {
+        validation_result.errors.push_back("Boolean CHECK equality requires BOOLEAN column '" +
+                                           table->get_table_name() + "." + check.column_name + "'");
+      }
+
+      if (check.type != CheckConstraintType::ColumnComparison) {
+        continue;
+      }
+
+      if (check.column == nullptr || check.right_column == nullptr) {
+        validation_result.errors.push_back("CHECK comparison references unknown column on table '" +
+                                           table->get_table_name() + "': " + check.raw_sql);
+        continue;
+      }
+
+      const DataType left_type = check.column->get_column_type().data_type;
+      const DataType right_type = check.right_column->get_column_type().data_type;
+      if (!comparable_check_types(left_type, right_type, check.comparison_operator)) {
+        validation_result.errors.push_back("Unsupported CHECK column comparison on table '" +
+                                           table->get_table_name() + "': " + check.raw_sql);
+      }
+
+      if (column_has_key_constraint(table, check.right_column) ||
+          local_foreign_key(table, check.right_column) != nullptr) {
+        validation_result.errors.push_back(
+            "CHECK column comparison cannot adjust key or foreign key column '" +
+            table->get_table_name() + "." + check.right_column->get_column_name() + "': " +
+            check.raw_sql);
+      }
+    }
+  }
+}
+
+std::optional<double> numeric_value(const GeneratedValue& value) {
+  return value.visit([](const auto& typed_value) -> std::optional<double> {
+    using ValueType = std::decay_t<decltype(typed_value)>;
+    if constexpr (std::is_same_v<ValueType, std::int64_t> ||
+                  std::is_same_v<ValueType, double>) {
+      return static_cast<double>(typed_value);
+    }
+    return std::nullopt;
+  });
+}
+
+std::optional<std::string> text_value(const GeneratedValue& value) {
+  return value.visit([](const auto& typed_value) -> std::optional<std::string> {
+    using ValueType = std::decay_t<decltype(typed_value)>;
+    if constexpr (std::is_same_v<ValueType, std::string>) {
+      return typed_value;
+    }
+    return std::nullopt;
+  });
+}
+
+std::string comparable_value(const GeneratedValue& value) {
+  std::ostringstream output;
+  output << value;
+  return output.str();
+}
+
+bool value_satisfies_check(const GeneratedValue& value, const EffectiveCheckConstraint& check) {
+  if (!check.allowed_values.empty()) {
+    return std::ranges::any_of(check.allowed_values, [&value](const GeneratedValue& allowed) {
+      return comparable_value(value) == comparable_value(allowed);
+    });
+  }
+  const auto numeric = numeric_value(value);
+  if (!numeric.has_value()) {
+    return !check.min_value.has_value() && !check.max_value.has_value();
+  }
+  if (check.min_value.has_value() &&
+      (numeric.value() < check.min_value.value() ||
+       (!check.min_inclusive && numeric.value() == check.min_value.value()))) {
+    return false;
+  }
+  if (check.max_value.has_value() &&
+      (numeric.value() > check.max_value.value() ||
+       (!check.max_inclusive && numeric.value() == check.max_value.value()))) {
+    return false;
+  }
+  return true;
+}
+
+void check_column_configs(const std::vector<TablePtr>& tables, const GenerationConfig& config,
+                          ValidationResult& validation_result) {
+  for (const auto& [table_name, column_configs] : config.table_column_configs) {
+    const Table* table = find_table(tables, table_name);
+    if (table == nullptr) {
+      continue;
+    }
+    for (const auto& [column_name, column_config] : column_configs) {
+      const Column* column = find_column(table, column_name);
+      const std::string qualified = table_name + "." + column_name;
+      if (column == nullptr) {
+        validation_result.errors.push_back("Config contains unknown column '" + qualified + "'");
+        continue;
+      }
+      const DataType data_type = column->get_column_type().data_type;
+      if ((column_config.min_value.has_value() || column_config.max_value.has_value()) &&
+          !ColumnDomainResolver::is_integer_type(data_type) &&
+          !ColumnDomainResolver::is_decimal_type(data_type)) {
+        validation_result.errors.push_back("Config min/max requires a numeric column: '" +
+                                           qualified + "'");
+      }
+      if (column_config.min_value.has_value() && column_config.max_value.has_value() &&
+          column_config.min_value.value() > column_config.max_value.value()) {
+        validation_result.errors.push_back("Config min exceeds max for column '" + qualified +
+                                           "'");
+      }
+      if (column_config.null_probability.has_value()) {
+        const double probability = column_config.null_probability.value();
+        if (probability < 0.0 || probability > 1.0) {
+          validation_result.errors.push_back("null_probability must be between 0 and 1 for '" +
+                                             qualified + "'");
+        }
+        if (!column->is_nullable() || column_has_key_constraint(table, column) ||
+            std::ranges::any_of(table->get_table_constraints(), [column](const auto& constraint) {
+              return constraint.type == ConstraintType::PrimaryKey &&
+                     contains_column(constraint.columns, column);
+            })) {
+          validation_result.errors.push_back("null_probability is not allowed for required column '" +
+                                             qualified + "'");
+        }
+      }
+      if (column_config.has_values && column_config.values.empty()) {
+        validation_result.errors.push_back("Configured values cannot be empty for column '" +
+                                           qualified + "'");
+      }
+      if (column_config.has_values &&
+          (column_config.min_value.has_value() || column_config.max_value.has_value())) {
+        validation_result.errors.push_back("Config cannot combine values with min/max for column '" +
+                                           qualified + "'");
+      }
+      const EffectiveCheckConstraint sql_check =
+          ColumnDomainResolver::effective_check_for_column(*table, *column);
+      for (const auto& configured_value : column_config.values) {
+        auto coerced = ColumnDomainResolver::coerce_configured_value(configured_value, data_type);
+        if (!coerced.has_value()) {
+          validation_result.errors.push_back("Configured value has the wrong type for column '" +
+                                             qualified + "'");
+          continue;
+        }
+        const auto configured_text = text_value(coerced.value());
+        const auto column_type = column->get_column_type();
+        if (configured_text.has_value() && column_type.length > 0 &&
+            configured_text->size() > static_cast<std::size_t>(column_type.length)) {
+          validation_result.errors.push_back("Configured value exceeds column length for '" +
+                                             qualified + "'");
+        }
+        if (!value_satisfies_check(coerced.value(), sql_check)) {
+          validation_result.errors.push_back("Configured value violates SQL CHECK for column '" +
+                                             qualified + "'");
+        }
+      }
+      EffectiveCheckConstraint effective =
+          ColumnDomainResolver::effective_check_for_column(*table, *column, config);
+      if (effective.min_value.has_value() && effective.max_value.has_value() &&
+          (effective.min_value.value() > effective.max_value.value() ||
+           (effective.min_value.value() == effective.max_value.value() &&
+            (!effective.min_inclusive || !effective.max_inclusive)))) {
+        validation_result.errors.push_back("Configured range does not overlap SQL CHECK for column '" +
+                                           qualified + "'");
+      }
+      if (const ForeignKey* foreign_key = local_foreign_key(table, column);
+          foreign_key != nullptr &&
+          (column_config.has_values || column_config.min_value.has_value() ||
+           column_config.max_value.has_value())) {
+        validation_result.errors.push_back(
+            "Local foreign key column config may only set null_probability: '" + qualified + "'");
+      }
+      if (const ForeignKey* foreign_key = local_foreign_key(table, column);
+          foreign_key != nullptr && foreign_key->local_columns.size() > 1 &&
+          column_config.null_probability.has_value() &&
+          std::ranges::any_of(foreign_key->local_columns,
+                              [](const Column* local_column) { return !local_column->is_nullable(); })) {
+        validation_result.errors.push_back(
+            "Composite foreign key null_probability requires every local column to be nullable: '" +
+            qualified + "'");
+      }
+      if (const ForeignKey* foreign_key = local_foreign_key(table, column);
+          foreign_key != nullptr && foreign_key->local_columns.size() > 1 &&
+          foreign_key->local_columns.front() == column) {
+        std::optional<double> composite_probability;
+        for (const Column* local_column : foreign_key->local_columns) {
+          const auto* local_config =
+              config.get_column_config(table_name, local_column->get_column_name());
+          if (local_config == nullptr || !local_config->null_probability.has_value()) {
+            continue;
+          }
+          if (composite_probability.has_value() &&
+              composite_probability.value() != local_config->null_probability.value()) {
+            validation_result.errors.push_back(
+                "Composite foreign key columns must use the same null_probability on table '" +
+                table_name + "'");
+            break;
+          }
+          composite_probability = local_config->null_probability;
+        }
+      }
     }
   }
 }
@@ -708,16 +962,17 @@ void check_unique_check_capacity(const std::vector<TablePtr>&, const GenerationC
   }
 }
 
-void check_composite_unique_capacity(const std::vector<TablePtr>&, const GenerationConfig&,
-                                     const SchemaCapacityInfo& capacity_info,
-                                     ValidationResult& validation_result) {
+void check_composite_key_capacity(const std::vector<TablePtr>&, const GenerationConfig&,
+                                  const SchemaCapacityInfo& capacity_info,
+                                  ValidationResult& validation_result) {
   for (const auto& table_info : capacity_info.tables) {
     if (table_info.requested_rows <= table_info.max_rows) {
       continue;
     }
 
     const auto reason_it = std::ranges::find_if(table_info.reasons, [](const std::string& reason) {
-      return reason.find("Composite UNIQUE(") != std::string::npos;
+      return reason.find("Composite UNIQUE(") != std::string::npos ||
+             reason.find("Composite PRIMARY KEY(") != std::string::npos;
     });
     if (reason_it == table_info.reasons.end()) {
       continue;
@@ -812,7 +1067,7 @@ ValidationResult ValidationRunner::validate_schema(const std::vector<TablePtr>& 
       check_self_reference_unsupported,
       check_unsupported_generation_type,
       check_unsupported_check_constraints,
-      check_composite_primary_key_unsupported,
+      check_advanced_check_constraints,
       check_unsupported_pk_fk_generation_type,
   };
 
@@ -828,6 +1083,7 @@ ValidationResult ValidationRunner::validate_config(const std::vector<TablePtr>& 
   ValidationResult validation_result(true, {});
   const std::vector<ConfigCheck> checks = {
       check_config_unknown_table,
+      check_column_configs,
   };
 
   for (const auto& check : checks) {
@@ -846,7 +1102,7 @@ ValidationResult ValidationRunner::validate_generation(const std::vector<TablePt
       check_unique_boolean_capacity,
       check_char_capacity,
       check_unique_check_capacity,
-      check_composite_unique_capacity,
+      check_composite_key_capacity,
       check_unique_fk_capacity,
   };
 
@@ -860,6 +1116,11 @@ ValidationResult ValidationRunner::validate_generation(const std::vector<TablePt
 ValidationResult ValidationRunner::validate_sqlite(
     const std::string& schema_sql, const std::vector<std::string>& insert_statements) {
   return SQLiteValidator::validate(schema_sql, insert_statements);
+}
+
+ValidationResult ValidationRunner::validate_sqlite_file(const std::string& schema_sql,
+                                                        const std::string& insert_file) {
+  return SQLiteValidator::validate_file(schema_sql, insert_file);
 }
 
 }  // namespace schemaforge

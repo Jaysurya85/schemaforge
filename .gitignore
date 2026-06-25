@@ -1,6 +1,13 @@
 build/
 cmake-build-*/
 tests/artifacts/
+benchmark-results/
+examples/final_demo/output.sql
+examples/final_demo/benchmark.yaml
+examples/final_demo/csv-output/
+examples/final_demo/csv-benchmark.yaml
+examples/final_demo/postgres-copy.sql
+examples/final_demo/postgres-copy-benchmark.yaml
 *.o
 *.so
 *.a

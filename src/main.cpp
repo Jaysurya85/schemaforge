@@ -1,6 +1,11 @@
 #include <chrono>
+#include <exception>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -10,10 +15,13 @@
 #include "schemaforge/generator/GenerationPlan.h"
 #include "schemaforge/graph/DependencyGraph.h"
 #include "schemaforge/io/FileReader.h"
+#include "schemaforge/output/CsvWriter.h"
+#include "schemaforge/output/PostgresCopyWriter.h"
 #include "schemaforge/output/SqlInsertWriter.h"
 #include "schemaforge/parser/ParserAdapter.h"
 #include "schemaforge/schema/Table.h"
 #include "schemaforge/validation/CapacityAnalyzer.h"
+#include "schemaforge/validation/PostgresDockerValidator.h"
 #include "schemaforge/validation/ValidationRunner.h"
 
 namespace {
@@ -29,11 +37,24 @@ double elapsed_seconds(std::chrono::steady_clock::time_point start,
   return std::chrono::duration<double>(end - start).count();
 }
 
-void print_usage() {
-  std::cerr << "Usage:\n"
-            << "  schemaforge init [--schema schema.sql] [--config schemaforge.yaml] "
-               "[--seed 42] [--default-rows 10]\n"
-            << "  schemaforge generate [--config schemaforge.yaml]\n";
+std::string format_mebibytes(const std::optional<std::uint64_t>& bytes) {
+  if (!bytes.has_value()) {
+    return "unavailable";
+  }
+
+  constexpr double bytes_per_mebibyte = 1024.0 * 1024.0;
+  std::ostringstream formatted;
+  formatted << std::fixed << std::setprecision(1)
+            << static_cast<double>(*bytes) / bytes_per_mebibyte << " MiB";
+  return formatted.str();
+}
+
+void print_usage(std::ostream& output) {
+  output << "Usage:\n"
+         << "  schemaforge init [--schema schema.sql] [--config schemaforge.yaml] "
+            "[--seed 42] [--default-rows 10]\n"
+         << "  schemaforge generate [--config schemaforge.yaml]\n"
+         << "  schemaforge --help\n";
 }
 
 SchemaAnalysis analyze_schema(const std::string& schema_path, bool verbose) {
@@ -98,21 +119,6 @@ SchemaAnalysis analyze_schema(const std::string& schema_path, bool verbose) {
           .table_order = std::move(table_order)};
 }
 
-bool write_output_file(const std::string& output_file,
-                       const std::vector<std::string>& insert_statements) {
-  std::ofstream file(output_file);
-  if (!file.is_open()) {
-    std::cerr << "Failed to open output file: " << output_file << '\n';
-    return false;
-  }
-
-  for (const auto& insert_statement : insert_statements) {
-    file << insert_statement << '\n';
-  }
-
-  return true;
-}
-
 int run_init(int argc, char* argv[]) {
   std::string config_path = "schemaforge.yaml";
   schemaforge::GenerationConfig generation_config = schemaforge::GenerationConfig::make_default();
@@ -148,8 +154,14 @@ int run_generate(int argc, char* argv[]) {
   const auto command_start = std::chrono::steady_clock::now();
   schemaforge::BenchmarkReport benchmark_report;
 
-  if (generation_config.output_format != "sql") {
+  if (generation_config.output_format != "sql" && generation_config.output_format != "csv" &&
+      generation_config.output_format != "postgres_copy") {
     std::cerr << "Unsupported output format: " << generation_config.output_format << '\n';
+    return 1;
+  }
+  if (generation_config.output_format == "postgres_copy" &&
+      generation_config.dialect != schemaforge::SqlDialect::Postgres) {
+    std::cerr << "postgres_copy output requires dialect: postgres\n";
     return 1;
   }
 
@@ -178,27 +190,91 @@ int run_generate(int argc, char* argv[]) {
   }
 
   const auto generation_start = std::chrono::steady_clock::now();
-  std::vector<schemaforge::TableData> table_data =
-      schemaforge::GenerationPlan::generate_table_data(analysis.sorted_tables, generation_config);
+  std::vector<std::string> output_files;
+  try {
+    if (generation_config.output_format == "sql") {
+      std::ofstream output_file(generation_config.output_file);
+      if (!output_file.is_open()) {
+        throw std::runtime_error("Failed to open output file: " + generation_config.output_file);
+      }
 
-  const auto generation_end = std::chrono::steady_clock::now();
+      schemaforge::GenerationPlan::stream_table_data(
+          analysis.sorted_tables, generation_config,
+          [&output_file, &generation_config](const schemaforge::GeneratedRow& row) {
+            schemaforge::SqlInsertWriter::write_row(output_file, row,
+                                                    generation_config.dialect);
+          });
+      output_file.close();
+      if (!output_file) {
+        throw std::runtime_error("Failed to write output file: " + generation_config.output_file);
+      }
+      output_files.push_back(generation_config.output_file);
+    } else if (generation_config.output_format == "csv") {
+      schemaforge::CsvWriter csv_writer(generation_config.output_directory,
+                                        analysis.sorted_tables);
+      schemaforge::GenerationPlan::stream_table_data(
+          analysis.sorted_tables, generation_config,
+          [&csv_writer](const schemaforge::GeneratedRow& row) { csv_writer.write_row(row); });
+      csv_writer.close();
+      output_files = csv_writer.get_output_files();
+    } else {
+      std::ofstream output_file(generation_config.output_file, std::ios::binary);
+      if (!output_file.is_open()) {
+        throw std::runtime_error("Failed to open output file: " + generation_config.output_file);
+      }
 
-  benchmark_report.generation_time_seconds = elapsed_seconds(generation_start, generation_end);
-  schemaforge::BenchmarkEngine::record_generated_rows(benchmark_report, table_data);
-
-  std::vector<std::string> insert_statements =
-      schemaforge::SqlInsertWriter::write_inserts(table_data);
-
-  if (!write_output_file(generation_config.output_file, insert_statements)) {
+      schemaforge::PostgresCopyWriter copy_writer(output_file);
+      schemaforge::GenerationPlan::stream_table_data(
+          analysis.sorted_tables, generation_config,
+          schemaforge::GenerationStreamConsumer{
+              .table_started = [&copy_writer](const schemaforge::Table& table) {
+                copy_writer.begin_table(table);
+              },
+              .row_generated = [&copy_writer](const schemaforge::GeneratedRow& row) {
+                copy_writer.write_row(row);
+              },
+              .table_finished = [&copy_writer](const schemaforge::Table& table) {
+                copy_writer.end_table(table);
+              }});
+      copy_writer.close();
+      output_file.close();
+      if (!output_file) {
+        throw std::runtime_error("Failed to write output file: " + generation_config.output_file);
+      }
+      output_files.push_back(generation_config.output_file);
+    }
+  } catch (const std::exception& error) {
+    std::string output_description = "PostgreSQL COPY output";
+    if (generation_config.output_format == "sql") {
+      output_description = "SQL INSERT statements";
+    } else if (generation_config.output_format == "csv") {
+      output_description = "CSV files";
+    }
+    std::cerr << "Failed to generate " << output_description << ": " << error.what() << '\n';
     return 1;
   }
 
-  std::cout << "Wrote SQL INSERT statements to " << generation_config.output_file << '\n';
+  const auto generation_end = std::chrono::steady_clock::now();
+  benchmark_report.generation_time_seconds = elapsed_seconds(generation_start, generation_end);
+  schemaforge::BenchmarkEngine::record_configured_rows(benchmark_report, analysis.sorted_tables,
+                                                       generation_config);
+  benchmark_report.output_file_size_bytes =
+      schemaforge::BenchmarkEngine::output_files_size_bytes(output_files);
 
-  if (generation_config.sqlite_validation) {
+  if (generation_config.output_format == "sql") {
+    std::cout << "Wrote SQL INSERT statements to " << generation_config.output_file << '\n';
+  } else if (generation_config.output_format == "csv") {
+    std::cout << "Wrote CSV files to " << generation_config.output_directory << '\n';
+  } else {
+    std::cout << "Wrote PostgreSQL COPY data to " << generation_config.output_file << '\n';
+  }
+
+  if (generation_config.dialect == schemaforge::SqlDialect::SQLite &&
+      generation_config.output_format == "sql" && generation_config.sqlite_validation) {
     const auto validation_start = std::chrono::steady_clock::now();
     schemaforge::ValidationResult sqlite_validation_result =
-        schemaforge::ValidationRunner::validate_sqlite(analysis.sql, insert_statements);
+        schemaforge::ValidationRunner::validate_sqlite_file(analysis.sql,
+                                                            generation_config.output_file);
     const auto validation_end = std::chrono::steady_clock::now();
     benchmark_report.validation_time_seconds = elapsed_seconds(validation_start, validation_end);
     benchmark_report.sqlite_validation_status = sqlite_validation_result.is_valid
@@ -209,16 +285,67 @@ int run_generate(int argc, char* argv[]) {
     if (!sqlite_validation_result.is_valid) {
       benchmark_report.total_command_time_seconds =
           elapsed_seconds(command_start, std::chrono::steady_clock::now());
+      benchmark_report.peak_process_memory_bytes =
+          schemaforge::BenchmarkEngine::peak_process_memory_bytes();
       schemaforge::BenchmarkEngine::write_report(benchmark_report,
                                                  generation_config.benchmark_file);
       return 1;
     }
   } else {
     benchmark_report.sqlite_validation_status = schemaforge::SQLiteValidationStatus::Skipped;
+    if (generation_config.dialect == schemaforge::SqlDialect::Postgres) {
+      std::cout << "\nSQLite validation skipped for PostgreSQL dialect.\n";
+    } else if (generation_config.output_format == "csv" && generation_config.sqlite_validation) {
+      std::cout << "\nSQLite validation skipped for CSV output.\n";
+    } else if (generation_config.output_format == "postgres_copy" &&
+               generation_config.sqlite_validation) {
+      std::cout << "\nSQLite validation skipped for PostgreSQL COPY output.\n";
+    }
+  }
+
+  if (generation_config.postgres_validation) {
+    const auto postgres_validation_start = std::chrono::steady_clock::now();
+    const schemaforge::PostgresDockerValidationResult postgres_result =
+        schemaforge::PostgresDockerValidator::validate(
+            generation_config.schema_path, analysis.sorted_tables, generation_config);
+    const auto postgres_validation_end = std::chrono::steady_clock::now();
+    benchmark_report.postgres_validation_time_seconds =
+        elapsed_seconds(postgres_validation_start, postgres_validation_end);
+
+    if (postgres_result.status == schemaforge::PostgresDockerValidationStatus::Passed) {
+      benchmark_report.postgres_validation_status =
+          schemaforge::PostgresValidationStatus::Passed;
+      std::cout << "PostgreSQL Docker Validation Result: Valid\n";
+    } else if (postgres_result.status ==
+               schemaforge::PostgresDockerValidationStatus::Unavailable) {
+      benchmark_report.postgres_validation_status =
+          schemaforge::PostgresValidationStatus::Unavailable;
+      std::cout << "PostgreSQL Docker validation unavailable";
+      if (!postgres_result.errors.empty()) {
+        std::cout << ": " << postgres_result.errors.front();
+      }
+      std::cout << '\n';
+    } else {
+      benchmark_report.postgres_validation_status =
+          schemaforge::PostgresValidationStatus::Failed;
+      std::cerr << "PostgreSQL Docker Validation Result: Invalid\n";
+      for (const auto& error : postgres_result.errors) {
+        std::cerr << "- " << error << '\n';
+      }
+      benchmark_report.total_command_time_seconds =
+          elapsed_seconds(command_start, std::chrono::steady_clock::now());
+      benchmark_report.peak_process_memory_bytes =
+          schemaforge::BenchmarkEngine::peak_process_memory_bytes();
+      schemaforge::BenchmarkEngine::write_report(benchmark_report,
+                                                 generation_config.benchmark_file);
+      return 1;
+    }
   }
 
   benchmark_report.total_command_time_seconds =
       elapsed_seconds(command_start, std::chrono::steady_clock::now());
+  benchmark_report.peak_process_memory_bytes =
+      schemaforge::BenchmarkEngine::peak_process_memory_bytes();
   if (!schemaforge::BenchmarkEngine::write_report(benchmark_report,
                                                   generation_config.benchmark_file)) {
     return 1;
@@ -227,6 +354,10 @@ int run_generate(int argc, char* argv[]) {
   std::cout << "Wrote benchmark report to " << generation_config.benchmark_file << '\n';
   std::cout << "Total rows generated: " << benchmark_report.total_rows << '\n';
   std::cout << "Generation time: " << benchmark_report.generation_time_seconds << "s\n";
+  std::cout << "Output file size: "
+            << format_mebibytes(benchmark_report.output_file_size_bytes) << '\n';
+  std::cout << "Peak process memory usage: "
+            << format_mebibytes(benchmark_report.peak_process_memory_bytes) << '\n';
 
   return 0;
 }
@@ -235,11 +366,16 @@ int run_generate(int argc, char* argv[]) {
 
 auto main(int argc, char* argv[]) -> int {
   if (argc < 2) {
-    print_usage();
+    print_usage(std::cerr);
     return 1;
   }
 
   const std::string command = argv[1];
+  if (command == "--help" || command == "-h" || command == "help") {
+    print_usage(std::cout);
+    return 0;
+  }
+
   if (command == "init") {
     return run_init(argc, argv);
   }
@@ -249,6 +385,6 @@ auto main(int argc, char* argv[]) -> int {
   }
 
   std::cerr << "Unknown command: " << command << '\n';
-  print_usage();
+  print_usage(std::cerr);
   return 1;
 }

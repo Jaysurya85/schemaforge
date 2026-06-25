@@ -1,0 +1,33 @@
+schema: examples/final_demo/schema.sql
+dialect: postgres
+generation:
+  seed: 2026
+  default_rows: 5
+  realistic: true
+output:
+  file: examples/final_demo/postgres-copy.sql
+  format: postgres_copy
+validation:
+  sqlite: false
+  postgres: false
+benchmark:
+  file: examples/final_demo/postgres-copy-benchmark.yaml
+tables:
+  users:
+    rows: 5
+  products:
+    rows: 6
+  orders:
+    rows: 8
+    columns:
+      coupon_code:
+        null_probability: 1.0
+  order_items:
+    rows: 10
+  payments:
+    rows: 8
+    columns:
+      external_reference:
+        null_probability: 1.0
+      paid_at:
+        null_probability: 0.25

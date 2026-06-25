@@ -1,0 +1,14 @@
+schema: examples/benchmarks/single_table_1m/schema.sql
+generation:
+  seed: 42
+  default_rows: 1000000
+output:
+  file: benchmark-results/single_table_1m.sql
+  format: sql
+validation:
+  sqlite: false
+benchmark:
+  file: benchmark-results/single_table_1m.yaml
+tables:
+  users:
+    rows: 1000000

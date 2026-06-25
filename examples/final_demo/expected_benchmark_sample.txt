@@ -1,0 +1,35 @@
+Representative CLI and benchmark shape from:
+
+  ./build/schemaforge generate --config examples/final_demo/schemaforge.yaml
+
+Timing, throughput, output size, and peak memory vary by machine. The stable fields to expect are:
+
+  Wrote SQL INSERT statements to examples/final_demo/output.sql
+  SQLite Validation Result: Valid
+  Wrote benchmark report to examples/final_demo/benchmark.yaml
+  Total rows generated: 37
+  Generation time: <seconds>s
+  Output file size: <MiB> MiB
+  Peak process memory usage: <MiB> MiB
+
+The benchmark YAML contains:
+
+  generation:
+    rows:
+      users: 5
+      products: 6
+      orders: 8
+      order_items: 10
+      payments: 8
+    total_rows: 37
+    time_seconds: <seconds>
+    throughput_rows_per_second: <rows-per-second>
+    output_file_size_bytes: <bytes>
+  validation:
+    sqlite: passed
+    time_seconds: <seconds>
+    postgres: skipped
+    postgres_time_seconds: 0
+  total:
+    command_time_seconds: <seconds>
+    peak_process_memory_bytes: <bytes-or-null>

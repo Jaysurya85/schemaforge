@@ -1,5 +1,6 @@
 
 #pragma once
+#include <functional>
 #include <ostream>
 #include <string>
 #include <unordered_map>
@@ -24,6 +25,18 @@ struct TableData {
   std::vector<ColumnData> columns;
 };
 
+struct GeneratedRow {
+  const Table* table;
+  std::vector<const Column*> columns;
+  std::vector<GeneratedValue> values;
+};
+
+struct GenerationStreamConsumer {
+  std::function<void(const Table&)> table_started;
+  std::function<void(const GeneratedRow&)> row_generated;
+  std::function<void(const Table&)> table_finished;
+};
+
 class GenerationPlan {
  private:
   static std::vector<ColumnData> generate_columns_data(
@@ -38,6 +51,12 @@ class GenerationPlan {
   static std::vector<TableData> generate_table_data(
       const std::vector<TablePtr>& tables, const std::unordered_map<std::string, int>& row_counts,
       int default_num_rows);
+  static void stream_table_data(const std::vector<TablePtr>& tables,
+                                const GenerationConfig& config,
+                                const std::function<void(const GeneratedRow&)>& row_consumer);
+  static void stream_table_data(const std::vector<TablePtr>& tables,
+                                const GenerationConfig& config,
+                                const GenerationStreamConsumer& consumer);
 };
 
 std::ostream& operator<<(std::ostream& os, const ColumnData& column_data);
