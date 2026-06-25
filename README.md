@@ -3,9 +3,9 @@
 SchemaForge parses a SQL schema, validates table relationships, generates deterministic sample
 data, writes SQL `INSERT` statements, and validates the result in SQLite.
 
-## Clone
+## Build from Source
 
-Using SSH:
+Clone the repository with submodules:
 
 ```bash
 git clone --recurse-submodules git@github.com:Jaysurya85/schemaforge.git
@@ -18,30 +18,63 @@ If you already cloned without submodules:
 git submodule update --init --recursive
 ```
 
+Install system dependencies before configuring CMake.
+
+Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install cmake g++ make libyaml-cpp-dev sqlite3 libsqlite3-dev
+```
+
+Arch/Manjaro:
+
+```bash
+sudo pacman -S cmake gcc make yaml-cpp sqlite
+```
+
+macOS with Homebrew:
+
+```bash
+brew install cmake yaml-cpp sqlite
+```
+
+Configure and build:
+
+```bash
+cmake -S . -B build
+cmake --build build
+```
+
+CMake builds the bundled Hyrise SQL parser library before linking the `schemaforge` binary. For a
+fully clean rebuild:
+
+```bash
+rm -rf build
+cmake -S . -B build
+cmake --build build
+```
+
+Optional install:
+
+```bash
+cmake --install build
+schemaforge --help
+```
+
+Use `--prefix` to install somewhere writable without `sudo`:
+
+```bash
+cmake --install build --prefix "$HOME/.local"
+"$HOME/.local/bin/schemaforge" --help
+```
+
 ## Build and Run
 
-Install the YAML C++ development package before building on a fresh system.
-
-Ubuntu:
+Check the local build:
 
 ```bash
-sudo apt install libyaml-cpp-dev
-```
-
-Arch:
-
-```bash
-sudo pacman -S yaml-cpp
-```
-
-Build the bundled SQL parser library:
-
-```bash
-make -C external/sql-parser
-```
-
-```bash
-make build
+./build/schemaforge --help
 ```
 
 Create an editable generation config from a schema:
@@ -204,6 +237,56 @@ scripts/run_postgres_validation_tests.sh
 ```
 
 The script exits successfully with a skip message when Docker is unavailable.
+
+## Troubleshooting
+
+### yaml-cpp
+
+If CMake reports that `yaml-cpp` cannot be found, install the development package for your
+platform and re-run configure from a clean build directory. On Ubuntu/Debian the package is
+`libyaml-cpp-dev`; on Arch/Manjaro and Homebrew it is `yaml-cpp`.
+
+```bash
+rm -rf build
+cmake -S . -B build
+```
+
+If yaml-cpp is installed in a custom prefix, point CMake at it with `CMAKE_PREFIX_PATH`:
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/prefix
+```
+
+### Hyrise SQL Parser
+
+SchemaForge vendors the Hyrise SQL parser under `external/sql-parser`. If configure or build fails
+because files are missing, initialize submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+If the parser build itself fails, run it directly to see the Makefile error:
+
+```bash
+make -C external/sql-parser
+```
+
+Then re-run `cmake --build build`.
+
+### SQLite
+
+SQLite validation needs both the SQLite runtime and development headers. On Ubuntu/Debian install
+`sqlite3 libsqlite3-dev`; on Arch/Manjaro install `sqlite`; on macOS Homebrew install `sqlite`.
+If CMake reports `SQLite3` missing, install those packages and configure again from a clean build
+directory.
+
+### PostgreSQL Docker Validation
+
+PostgreSQL validation is optional and requires Docker. If Docker is not installed, not running, or
+the current user cannot access the Docker daemon, generation still succeeds and the benchmark
+reports `postgres: unavailable`. Start Docker, verify `docker version` works, and retry for full
+PostgreSQL validation. On macOS this requires Docker Desktop.
 
 ## Tests
 

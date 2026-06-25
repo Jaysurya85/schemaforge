@@ -49,11 +49,12 @@ std::string format_mebibytes(const std::optional<std::uint64_t>& bytes) {
   return formatted.str();
 }
 
-void print_usage() {
-  std::cerr << "Usage:\n"
-            << "  schemaforge init [--schema schema.sql] [--config schemaforge.yaml] "
-               "[--seed 42] [--default-rows 10]\n"
-            << "  schemaforge generate [--config schemaforge.yaml]\n";
+void print_usage(std::ostream& output) {
+  output << "Usage:\n"
+         << "  schemaforge init [--schema schema.sql] [--config schemaforge.yaml] "
+            "[--seed 42] [--default-rows 10]\n"
+         << "  schemaforge generate [--config schemaforge.yaml]\n"
+         << "  schemaforge --help\n";
 }
 
 SchemaAnalysis analyze_schema(const std::string& schema_path, bool verbose) {
@@ -365,11 +366,16 @@ int run_generate(int argc, char* argv[]) {
 
 auto main(int argc, char* argv[]) -> int {
   if (argc < 2) {
-    print_usage();
+    print_usage(std::cerr);
     return 1;
   }
 
   const std::string command = argv[1];
+  if (command == "--help" || command == "-h" || command == "help") {
+    print_usage(std::cout);
+    return 0;
+  }
+
   if (command == "init") {
     return run_init(argc, argv);
   }
@@ -379,6 +385,6 @@ auto main(int argc, char* argv[]) -> int {
   }
 
   std::cerr << "Unknown command: " << command << '\n';
-  print_usage();
+  print_usage(std::cerr);
   return 1;
 }

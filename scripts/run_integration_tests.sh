@@ -339,6 +339,18 @@ run_usage_invalid() {
   fi
 }
 
+run_help_valid() {
+  local name="cli/help"
+  local log_file="${TMP_DIR}/cli_help.log"
+  if "${BINARY}" --help >"${log_file}" 2>&1 &&
+      grep -q "Usage:" "${log_file}" &&
+      grep -q "schemaforge generate" "${log_file}"; then
+    record_pass "${name}"
+  else
+    record_fail "${name}" "${log_file}"
+  fi
+}
+
 run_sqlite_disabled() {
   local name="valid/sqlite_disabled"
   local config_file="${TMP_DIR}/sqlite_disabled.yaml"
@@ -1517,6 +1529,7 @@ build_project
 prepare_artifacts
 
 run_usage_invalid
+run_help_valid
 run_valid "valid/basic_fk" "tests/valid/basic_fk/schema.sql"
 run_valid "valid/reverse_table_order" "tests/valid/reverse_table_order/schema.sql"
 run_valid "valid/single_table_random_values" "tests/valid/single_table_random_values/schema.sql"
