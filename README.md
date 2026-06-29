@@ -1,7 +1,92 @@
 # SchemaForge
 
-SchemaForge parses a SQL schema, validates table relationships, generates deterministic sample
-data, writes SQL `INSERT` statements, and validates the result in SQLite.
+SchemaForge is a C++ relational test-data generation engine that parses SQL DDL, understands table
+relationships, and generates deterministic, constraint-valid datasets for realistic database
+testing.
+
+It supports primary keys, foreign keys, composite keys, unique constraints, nullable columns,
+`CHECK` constraints, SQL/CSV/PostgreSQL `COPY` output, benchmark reporting, and optional
+SQLite/PostgreSQL validation.
+
+Unlike basic fake-data tools, SchemaForge focuses on relational correctness: generated child rows
+reference valid parent rows, tables are emitted in foreign-key dependency order, and invalid schemas
+or configurations are caught before generation.
+
+## Quick Demo
+
+```bash
+./build/schemaforge init --schema examples/final_demo/schema.sql --config schemaforge.yaml --seed 42 --default-rows 1000
+./build/schemaforge generate --config schemaforge.yaml
+```
+
+SchemaForge parses the schema, builds a foreign-key dependency order, generates deterministic rows,
+streams the selected output format, and optionally validates the result.
+
+For a compact end-to-end demo covering SQL, CSV, PostgreSQL `COPY`, validation, deterministic
+output, constraints, foreign-key ordering, composite keys, and benchmark reporting, see
+`examples/final_demo/`.
+
+## Why SchemaForge?
+
+Most fake-data generators work well for flat tables, but real application schemas have
+relationships:
+
+- Orders must reference valid users.
+- Join tables need composite keys.
+- Unique constraints can make generation impossible if capacity is too small.
+- `CHECK` constraints restrict valid values.
+- Large outputs should not require holding every generated row in memory.
+
+SchemaForge was built to explore these database and systems problems in C++: schema parsing,
+constraint modeling, dependency resolution, deterministic generation, streaming output, and
+validation.
+
+## Architecture
+
+```text
+SQL DDL
+  |
+  v
+Hyrise SQL Parser
+  |
+  v
+Internal Schema Model
+  |
+  v
+Schema + Config Validation
+  |
+  v
+Foreign-Key Dependency Graph
+  |
+  v
+Deterministic Row Generator
+  |
+  v
+SQL / CSV / PostgreSQL COPY Writer
+  |
+  v
+SQLite / PostgreSQL Validation + Benchmark Report
+```
+
+For more detail on the internal pipeline and design rationale, see `docs/architecture.md`.
+
+## Benchmark Examples
+
+Representative local benchmark run. Timing, throughput, output size, and peak memory vary by
+machine.
+
+| Case | Rows | Output | Generation Time | Throughput | Output Size | Peak Memory | Validation |
+|---|---:|---|---:|---:|---:|---:|---|
+| `single_table_1m` | 1,000,000 | SQL | 6.706 s | 149,122 rows/sec | 125.0 MiB | 5.5 MiB | SQLite skipped |
+| `users_orders_1m` | 1,100,000 | SQL | 11.878 s | 92,609 rows/sec | 152.9 MiB | 136.8 MiB | SQLite passed in 5.268 s |
+| `ecommerce_large` | 1,610,000 | SQL | 10.938 s | 147,195 rows/sec | 191.6 MiB | 5.7 MiB | SQLite skipped |
+
+Run the benchmarks from the repository root:
+
+```bash
+make build
+scripts/run_benchmarks.sh
+```
 
 ## Build from Source
 
