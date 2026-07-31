@@ -1,127 +1,221 @@
 # SchemaForge
 
-SchemaForge is a C++ relational test-data generation engine that parses SQL DDL, understands table
-relationships, and generates deterministic, constraint-valid datasets for realistic database
-testing.
+A modular C++ relational test-data generation engine: parse SQL CREATE TABLE schemas, model relational constraints, generate deterministic constraint-valid datasets, stream SQL/CSV/PostgreSQL COPY output, and validate generated data with SQLite or PostgreSQL.
 
-It supports primary keys, foreign keys, composite keys, unique constraints, nullable columns,
-`CHECK` constraints, SQL/CSV/PostgreSQL `COPY` output, benchmark reporting, and optional
-SQLite/PostgreSQL validation.
+SchemaForge is an educational systems project for practicing C++ beyond syntax: parser integration, internal domain modeling, constraint validation, graph-based dependency ordering, deterministic generation, streaming writers, database-backed correctness checks, and benchmark reporting.
 
-Unlike basic fake-data tools, SchemaForge focuses on relational correctness: generated child rows
-reference valid parent rows, tables are emitted in foreign-key dependency order, and invalid schemas
-or configurations are caught before generation.
-
-## Quick Demo
-
-```bash
-./build/schemaforge init --schema examples/final_demo/schema.sql --config schemaforge.yaml --seed 42 --default-rows 1000
-./build/schemaforge generate --config schemaforge.yaml
-```
-
-SchemaForge parses the schema, builds a foreign-key dependency order, generates deterministic rows,
-streams the selected output format, and optionally validates the result.
-
-For a compact end-to-end demo covering SQL, CSV, PostgreSQL `COPY`, validation, deterministic
-output, constraints, foreign-key ordering, composite keys, and benchmark reporting, see
-`examples/final_demo/`.
-
-## Why SchemaForge?
-
-Most fake-data generators work well for flat tables, but real application schemas have
-relationships:
-
-- Orders must reference valid users.
-- Join tables need composite keys.
-- Unique constraints can make generation impossible if capacity is too small.
-- `CHECK` constraints restrict valid values.
-- Large outputs should not require holding every generated row in memory.
-
-SchemaForge was built to explore these database and systems problems in C++: schema parsing,
-constraint modeling, dependency resolution, deterministic generation, streaming output, and
-validation.
+## Table of contents
+-   [Architecture](#architecture)
+-   [Features](#features)
+-   [Stack and dependencies](#stack-and-dependencies)
+-   [Project structure](#project-structure)
+-   [Build](#build)
+-   [Testing](#testing)
+-   [Quick demo](#quick-demo)
+-   [Configuration](#configuration)
+-   [Output formats](#output-formats)
+-   [Validation](#validation)
+-   [Generation model](#generation-model)
+-   [Benchmarks](#benchmarks)
+-   [Supported SQL and types](#supported-sql-and-types)
+-   [Troubleshooting](#troubleshooting)
+-   [Limitations and future work](#limitations-and-future-work)
+-   [Extending the codebase](#extending-the-codebase)
+-   [Statistics](#statistics)
+-   [License and references](#license-and-references)
 
 ## Architecture
 
-```text
-SQL DDL
-  |
-  v
-Hyrise SQL Parser
-  |
-  v
-Internal Schema Model
-  |
-  v
-Schema + Config Validation
-  |
-  v
-Foreign-Key Dependency Graph
-  |
-  v
-Deterministic Row Generator
-  |
-  v
-SQL / CSV / PostgreSQL COPY Writer
-  |
-  v
-SQLite / PostgreSQL Validation + Benchmark Report
+### Layers
+
+-   **CLI** — `init` creates editable configs; `generate` runs the generation pipeline.
+-   **Parser adapter** — wraps Hyrise SQL Parser and converts parser output into SchemaForge domain objects.
+-   **Schema model** — represents tables, columns, SQL types, keys, unique constraints, foreign keys, nullability, and checks.
+-   **Config model** — loads generation settings, output settings, validation settings, row counts, and column controls.
+-   **Validation** — validates schema references, type compatibility, config correctness, constraint support, and generation feasibility.
+-   **Dependency graph** — orders tables by foreign-key dependencies.
+-   **Generation plan** — prepares table/column generation based on constraints and config.
+-   **Typed generators** — generate deterministic values for supported SQL types.
+-   **Output writers** — stream rows to SQL INSERT, CSV, or PostgreSQL COPY.
+-   **Database validation** — optionally imports generated output into SQLite or PostgreSQL.
+-   **Benchmark engine** — records rows, timing, throughput, output size, validation time, and memory usage.
+
+```mermaid
+flowchart TD
+  A[SQL CREATE TABLE schema] --> B[Hyrise SQL Parser]
+  B --> C[Parser Adapter]
+  C --> D[Internal Schema Model]
+  D --> E[Schema + Config Validation]
+  E --> F[Foreign-Key Dependency Graph]
+  F --> G[Generation Plan]
+  G --> H[Deterministic Row Generator]
+  H --> I{Streaming Output Writer}
+  I --> J[SQL INSERT]
+  I --> K[CSV files]
+  I --> L[PostgreSQL COPY]
+  J --> M[SQLite / PostgreSQL Validation]
+  K --> M
+  L --> M
+  M --> N[Benchmark Report]
+
 ```
 
-For more detail on the internal pipeline and design rationale, see `docs/architecture.md`.
+### Design choices
 
-## Benchmark Examples
+-   **Parser boundary**: external parser structures are converted once into internal C++ objects instead of leaking parser-specific types across the codebase.
+-   **Domain model first**: generation operates on SchemaForge's own table, column, type, and constraint model.
+-   **Dependency-first generation**: parent tables are generated before child tables by topologically ordering the foreign-key graph.
+-   **Deterministic output**: seed-based generation makes results reproducible across runs.
+-   **Streaming writers**: large datasets are written row-by-row instead of requiring all rows to be buffered before output.
+-   **Validation before side effects**: unsupported schemas and impossible configs are rejected before output files are opened.
+-   **Database-backed correctness**: generated data can be imported into real databases so real constraints verify correctness.
+## Features
 
-Representative local benchmark run. Timing, throughput, output size, and peak memory vary by
-machine.
+### Schema parsing and relationship modeling
 
-| Case | Rows | Output | Generation Time | Throughput | Output Size | Peak Memory | Validation |
-|---|---:|---|---:|---:|---:|---:|---|
-| `single_table_1m` | 1,000,000 | SQL | 6.706 s | 149,122 rows/sec | 125.0 MiB | 5.5 MiB | SQLite skipped |
-| `users_orders_1m` | 1,100,000 | SQL | 11.878 s | 92,609 rows/sec | 152.9 MiB | 136.8 MiB | SQLite passed in 5.268 s |
-| `ecommerce_large` | 1,610,000 | SQL | 10.938 s | 147,195 rows/sec | 191.6 MiB | 5.7 MiB | SQLite skipped |
+-   Parses SQL CREATE TABLE schemas.
+-   Uses the vendored Hyrise SQL Parser as the SQL parsing frontend.
+-   Converts parser output into SchemaForge's internal C++ domain model.
+-   Models tables, columns, SQL types, primary keys, unique constraints, checks, nullable columns, and foreign keys.
+-   Supports single-column and composite primary keys.
+-   Supports single-column and composite unique constraints.
+-   Supports foreign keys that reference primary-key or unique columns.
+-   Builds a foreign-key dependency graph and generates parent tables before dependent child tables.
+-   Rejects invalid schemas and impossible generation configurations before output is written.
 
-Run the benchmarks from the repository root:
+### Constraint-aware generation
 
-```bash
-make build
-scripts/run_benchmarks.sh
+-   Generates deterministic data from a configurable seed.
+-   Supports default row counts and per-table row counts.
+-   Supports per-column numeric ranges, fixed value lists, and null probabilities.
+-   Supports nullable single-column foreign keys.
+-   Supports composite foreign-key null behavior by making the complete local tuple NULL together.
+-   Registers generated parent primary-key / unique-key values as key sources.
+-   Samples child foreign keys from valid parent key sources instead of generating unrelated random values.
+-   Performs finite-domain capacity checks for unique constraints.
+-   Supports simple CHECK constraints:
+    -   numeric ranges
+    -   BETWEEN
+    -   numeric IN
+    -   text IN
+
+### Output, validation, and benchmarking
+
+-   Streams SQL INSERT output.
+-   Streams one headered CSV file per table.
+-   Streams transactional PostgreSQL COPY FROM STDIN output.
+-   Optionally validates generated SQL in SQLite.
+-   Optionally validates SQL, CSV, and PostgreSQL COPY output using a temporary PostgreSQL Docker container.
+-   Writes benchmark metrics for rows, generation time, throughput, output size, validation time, total command time, and Linux peak RSS memory.
+
+## Stack and dependencies
+
+
+| Component | Details |
+ |---|---|
+ | Language | C++ |
+  | Build system | CMake, plus a convenience Makefile |
+   | SQL parser | Vendored Hyrise SQL Parser under `external/sql-parser` | 
+   | Config | YAML via yaml-cpp | 
+   | SQLite validation | SQLite runtime + development headers | 
+   | PostgreSQL validation | Docker + temporary `postgres:17-alpine` container | 
+   | Primary platforms | Linux, Arch/Manjaro, Ubuntu/Debian, macOS | 
+   | Main binary | `schemaforge` |
+
+## Project structure
+
+```
+schemaforge/
+├── CMakeLists.txt
+├── Makefile
+├── README.md
+├── LICENSE
+├── docs/
+│   └── architecture.md
+├── examples/
+│   ├── final_demo/                 # End-to-end demo configs, schema, output samples, benchmarks
+│   └── benchmarks/                 # Large benchmark fixtures
+│       ├── single_table_1m/
+│       ├── users_orders_1m/
+│       └── ecommerce_large/
+├── external/
+│   └── sql-parser/                 # Hyrise SQL Parser submodule
+├── include/
+│   └── schemaforge/
+│       ├── benchmark/              # Benchmark reporting interfaces
+│       ├── config/                 # YAML generation config model
+│       ├── domain/                 # Column/domain resolution
+│       ├── generator/              # Typed value generation and generation plans
+│       ├── graph/                  # Dependency graph / ordering logic
+│       ├── io/                     # File and stream helpers
+│       ├── output/                 # SQL, CSV, PostgreSQL COPY writers
+│       ├── parser/                 # Parser adapter boundary
+│       ├── schema/                 # Table, column, type, and constraint model
+│       └── validation/             # Schema/config/database validation
+├── src/
+│   ├── benchmark/
+│   │   └── BenchmarkEngine.cpp
+│   ├── config/
+│   │   └── GenerationConfig.cpp
+│   ├── domain/
+│   │   └── ColumnDomainResolver.cpp
+│   └── generator/
+│       ├── BooleanGenerator.cpp
+│       ├── DecimalGenerator.cpp
+│       ├── GenerationPlan.cpp
+│       └── IntGenerator.cpp
+├── scripts/
+│   ├── run_benchmarks.sh
+│   ├── run_integration_tests.sh
+│   └── run_postgres_validation_tests.sh
+├── benchmark-results/              # Generated benchmark artifacts, ignored by Git
+├── schemaforge.yaml                # Example/generated config
+├── benchmark.yaml                  # Example/generated benchmark report
+└── output.sql                      # Example/generated SQL output
+
 ```
 
-## Build from Source
+Generated directories such as `build/`, `benchmark-results/`, `.cache/`, and `.git/` are not part of the source design.
+
+## Build
 
 Clone the repository with submodules:
 
 ```bash
 git clone --recurse-submodules git@github.com:Jaysurya85/schemaforge.git
 cd schemaforge
+
 ```
 
-If you already cloned without submodules:
+If the repository was cloned without submodules:
 
 ```bash
 git submodule update --init --recursive
+
 ```
 
 Install system dependencies before configuring CMake.
 
-Ubuntu/Debian:
+**Ubuntu / Debian**
 
 ```bash
 sudo apt update
 sudo apt install cmake g++ make libyaml-cpp-dev sqlite3 libsqlite3-dev
+
 ```
 
-Arch/Manjaro:
+**Arch / Manjaro**
 
 ```bash
 sudo pacman -S cmake gcc make yaml-cpp sqlite
+
 ```
 
-macOS with Homebrew:
+**macOS with Homebrew**
 
 ```bash
 brew install cmake yaml-cpp sqlite
+
 ```
 
 Configure and build:
@@ -129,15 +223,18 @@ Configure and build:
 ```bash
 cmake -S . -B build
 cmake --build build
+
 ```
 
-CMake builds the bundled Hyrise SQL parser library before linking the `schemaforge` binary. For a
-fully clean rebuild:
+CMake builds the bundled Hyrise SQL Parser library before linking the schemaforge binary.
+
+For a fully clean rebuild:
 
 ```bash
 rm -rf build
 cmake -S . -B build
 cmake --build build
+
 ```
 
 Optional install:
@@ -145,53 +242,120 @@ Optional install:
 ```bash
 cmake --install build
 schemaforge --help
+
 ```
 
-Use `--prefix` to install somewhere writable without `sudo`:
+Install somewhere writable without sudo:
 
 ```bash
 cmake --install build --prefix "$HOME/.local"
 "$HOME/.local/bin/schemaforge" --help
+
 ```
 
-## Build and Run
+## Testing
+
+Run the integration test suite:
+
+```bash
+scripts/run_integration_tests.sh
+
+```
+
+Valid test outputs and benchmark reports are written to:
+
+```
+tests/artifacts/
+
+```
+
+Run real PostgreSQL import tests for both CSV and PostgreSQL COPY output:
+
+```bash
+scripts/run_postgres_validation_tests.sh
+
+```
+
+The PostgreSQL validation script exits successfully with a skip message when Docker is unavailable.
+
+## Quick demo
 
 Check the local build:
 
 ```bash
 ./build/schemaforge --help
+
 ```
 
 Create an editable generation config from a schema:
 
 ```bash
-./build/schemaforge init --schema tests/valid/basic_fk/schema.sql --config schemaforge.yaml
+./build/schemaforge init \
+  --schema examples/final_demo/schema.sql \
+  --config schemaforge.yaml \
+  --seed 42 \
+  --default-rows 1000
+
 ```
 
-Generate SQL INSERT statements from the config:
+Generate data from the config:
 
 ```bash
 ./build/schemaforge generate --config schemaforge.yaml
+
 ```
 
-The generated config stores the schema path, SQL dialect, seed, default row count, output file,
-benchmark file, validation settings, and per-table row counts. Edit `schemaforge.yaml` before
-running `generate` to change table row counts or output settings.
+SchemaForge parses the schema, validates relationships and generation settings, builds a foreign-key dependency order, generates deterministic rows, streams the selected output format, and optionally validates the result.
+
+For a compact end-to-end demo covering SQL, CSV, PostgreSQL COPY, validation, deterministic output, constraints, foreign-key ordering, composite keys, and benchmark reporting, see:
+
+```
+examples/final_demo/
+
+```
+
+For the internal pipeline and design rationale, see:
+
+```
+docs/architecture.md
+
+```
+
+## Configuration
+
+`init` writes an editable YAML config containing the schema path, dialect, seed, row counts, output settings, benchmark settings, validation settings, and per-table/per-column controls.
+
+Minimal example:
 
 ```yaml
 schema: schema.sql
 dialect: sqlite
+
+generation:
+  seed: 42
+  default_rows: 100
+
+output:
+  format: sql
+  file: output.sql
+
+benchmark:
+  file: benchmark.yaml
+
+validation:
+  sqlite: true
+  postgres: false
+
 ```
 
-Supported dialects are `sqlite` and `postgres`. SQL INSERT output uses standard single-quote string
-escaping, `true`/`false` booleans, and double-quoted identifiers for both dialects.
+Supported dialects:
 
-### Column Controls and Realistic Data
+-   `sqlite`
+-   `postgres`
 
-Realistic generation is opt-in and uses deterministic built-in `en-US` data. Related fields in a
-row share one profile, so names, email addresses, phone numbers, and city/state/ZIP values remain
-coherent. No external faker library or system clock is used, and the same seed produces the same
-output.
+### Column controls and realistic data
+
+Realistic generation is opt-in and deterministic. Related fields in the same generated row share one profile, so names, emails, phone numbers, and city/state/ZIP values remain coherent. No external faker library or system clock is used; the same seed produces the same output.
 
 ```yaml
 generation:
@@ -210,262 +374,551 @@ tables:
         values: [active, inactive]
       middle_name:
         null_probability: 0.4
+
 ```
 
-`min` and `max` apply to numeric columns. `values` accepts YAML scalar values and is converted to
-the target SQL type. `null_probability` must be between `0.0` and `1.0` and may only be used on
-nullable, non-key columns. Nullable single-column foreign keys may be NULL; for composite foreign
-keys, configuring one local column makes the complete tuple NULL together.
+Column control rules:
 
-Column settings are validated against SQL types and `CHECK` constraints before output is opened.
-Settings on parent `PRIMARY KEY` or `UNIQUE` columns define the registered key source, so child
-foreign keys sample the configured parent values. Local FK columns may only set
-`null_probability`.
+-   `min` and `max` apply to numeric columns.
+-   `values` accepts YAML scalar values and converts them to the target SQL type.
+-   `null_probability` must be between 0.0 and 1.0.
+-   `null_probability` may only be used on nullable, non-key columns.
+-   Nullable single-column foreign keys may be NULL.
+-   For composite foreign keys, configuring one local column makes the complete tuple NULL together.
+-   Column settings are validated against SQL types and CHECK constraints before output is opened.
+-   Settings on parent PRIMARY KEY or UNIQUE columns define the registered key source used by child foreign keys.
+-   Local foreign-key columns may only set `null_probability`.
+-   Explicit SQL constraints and column settings take precedence over name-based realistic-data heuristics.
+-   When `realistic` is omitted or false, SchemaForge uses deterministic placeholder generation.
 
-When `realistic` is omitted or false, SchemaForge retains the original deterministic placeholder
-format. SQL constraints and explicit column settings take precedence over name-based heuristics.
+## Output formats
 
-Useful init options:
+### SQL INSERT output
 
-```bash
-./build/schemaforge init --schema tests/valid/basic_fk/schema.sql --config schemaforge.yaml --seed 42 --default-rows 10
+Default SQL output writes INSERT statements to a single SQL file.
+
+```yaml
+output:
+  format: sql
+  file: output.sql
+
 ```
 
-`generate` writes INSERT statements to `output.sql` and benchmark metrics to `benchmark.yaml`.
-Generation throughput is calculated from generated rows divided by generation time only; SQLite
-validation time is reported separately. On Linux, the benchmark also reports peak process memory
-usage. Output file size is reported on every supported platform.
+Behavior:
 
-### CSV Output
+-   Uses standard single-quote string escaping.
+-   Uses `true` / `false` booleans.
+-   Uses double-quoted identifiers for SQLite and PostgreSQL dialects.
+-   Preserves deterministic seed behavior.
+-   Can be validated with SQLite or PostgreSQL, depending on dialect and validation settings.
 
-Set the output format and directory in the generation config:
+### CSV output
+
+Set the output format and directory:
 
 ```yaml
 output:
   format: csv
   directory: output/
+
 ```
 
-Then run the normal generation command:
+Generate normally:
 
 ```bash
 ./build/schemaforge generate --config schemaforge.yaml
+
 ```
 
-Each table is streamed to its own file, such as `output/users.csv` and `output/orders.csv`. Files
-include a header in schema column order, and rows retain generation order. Missing directories are
-created automatically; `output.directory` is required for CSV configs.
+Behavior:
 
-Text containing commas, quotes, CR, newlines, or surrounding whitespace is quoted, and embedded
-quotes are doubled. NULL is an empty field while an empty text value is written as `""`. Booleans
-use `true`/`false`, decimals use two fractional digits, and date/time values use the same padded
-formats as SQL output.
+-   Each table is streamed to its own file, such as `output/users.csv` and `output/orders.csv`.
+-   Files include a header in schema column order.
+-   Rows retain generation order.
+-   Missing output directories are created automatically.
+-   `output.directory` is required for CSV configs.
+-   Text containing commas, quotes, carriage returns, newlines, or surrounding whitespace is quoted.
+-   Embedded quotes are doubled.
+-   NULL is written as an empty field.
+-   Empty text is written as `""`.
+-   Booleans use `true` / `false`.
+-   Decimals use two fractional digits.
+-   Date/time values use the same padded formats as SQL output.
+-   SQLite validation is skipped for CSV because the SQLite validator executes SQL statements.
+-   Benchmarks still report rows, throughput, memory, and combined CSV output size.
 
-SQLite validation is skipped for CSV because the current validator executes SQL statements. The
-benchmark still reports rows, throughput, memory, and the combined size of all generated CSV files.
-
-### PostgreSQL COPY Output
+### PostgreSQL COPY output
 
 Use `postgres_copy` to create one self-contained data file for `psql`:
 
 ```yaml
 dialect: postgres
+
 output:
   format: postgres_copy
   file: output.copy.sql
+
 validation:
   sqlite: false
+
 ```
 
-Generate and import it with:
+Generate and import:
 
 ```bash
 ./build/schemaforge generate --config schemaforge.yaml
 psql --dbname your_database --file output.copy.sql
+
 ```
 
-The target tables must already exist. The generated file wraps all tables in one transaction and
-emits `COPY ... FROM STDIN` blocks in foreign-key dependency order. Rows use PostgreSQL text COPY
-format: fields are tab-separated, NULL is `\N`, and backslashes and control characters are escaped.
-Table and column identifiers are double-quoted.
+Behavior:
 
-PostgreSQL COPY output is only allowed with `dialect: postgres`. It streams rows directly to one
-file and retains deterministic seed behavior. SQLite validation is skipped because COPY syntax is
-PostgreSQL-specific; benchmark rows, throughput, memory, and output size are still reported.
+-   Target tables must already exist.
+-   Output is wrapped in one transaction.
+-   Tables are emitted in foreign-key dependency order.
+-   Rows use PostgreSQL text COPY format.
+-   Fields are tab-separated.
+-   NULL is written as `\N`.
+-   Backslashes and control characters are escaped.
+-   Table and column identifiers are double-quoted.
+-   `postgres_copy` is only allowed with `dialect: postgres`.
+-   Rows are streamed directly to one file.
+-   SQLite validation is skipped because COPY syntax is PostgreSQL-specific.
+-   Benchmark rows, throughput, memory, and output size are still reported.
 
-### PostgreSQL Docker Validation
+## Validation
 
-PostgreSQL validation is selected by `dialect: postgres` and can be enabled for SQL INSERT, CSV,
-and `postgres_copy` output:
+SchemaForge validates schema, config, and generation feasibility before writing output. Validation reports aggregated errors instead of stopping at the first issue.
+
+### Static validation
+
+SchemaForge checks for:
+
+-   missing schema paths and missing schema files
+-   unsupported column types
+-   duplicate table names
+-   duplicate column names
+-   primary-key constraints that reference missing columns
+-   unique constraints that reference missing columns
+-   foreign keys with missing local columns
+-   foreign keys with missing referenced tables
+-   foreign keys with missing referenced columns
+-   mismatched local and referenced foreign-key column counts
+-   mismatched local and referenced foreign-key column types
+-   foreign keys that do not reference a PRIMARY KEY or UNIQUE constraint
+-   dependency cycles between tables
+-   unsupported self-referencing foreign keys
+-   unsupported generation types
+-   unsupported CHECK expressions
+-   YAML config entries that reference unknown tables
+-   child tables that request rows while a referenced parent table has zero rows
+-   row-count requests that exceed finite unique capacities
+
+### SQLite validation
+
+SQLite validation can be enabled for SQL output:
+
+```yaml
+validation:
+  sqlite: true
+
+```
+
+SQLite validates generated SQL by executing the generated statements and checking configured table row counts.
+
+### PostgreSQL Docker validation
+
+PostgreSQL validation is selected by `dialect: postgres` and can be enabled for SQL INSERT, CSV, and PostgreSQL COPY output:
 
 ```yaml
 dialect: postgres
+
 validation:
   sqlite: false
   postgres: true
+
 ```
 
-SchemaForge starts a temporary `postgres:17-alpine` container without publishing a host port,
-executes the schema, imports the generated data, and verifies every configured table row count.
-PostgreSQL enforces primary keys, unique constraints, checks, and foreign keys during the import.
+SchemaForge starts a temporary `postgres:17-alpine` container without publishing a host port, executes the schema, imports the generated data, and verifies every configured table row count.
+
+PostgreSQL enforces:
+
+-   primary keys
+-   unique constraints
+-   check constraints
+-   foreign keys
+
 The container is removed after validation.
 
-If Docker is missing, inaccessible, or unresponsive, generation succeeds and the benchmark reports
-`postgres: unavailable`. Schema or import errors report `postgres: failed` and fail the command.
-The schema must use PostgreSQL-compatible DDL; compatibility errors from PostgreSQL are returned in
-the validation output.
+If Docker is missing, inaccessible, or unresponsive, generation succeeds and the benchmark reports:
 
-Run the real Docker import tests for both COPY and CSV with:
+```
+postgres: unavailable
 
-```bash
-scripts/run_postgres_validation_tests.sh
 ```
 
-The script exits successfully with a skip message when Docker is unavailable.
+Schema or import errors report:
 
-## Troubleshooting
+```
+postgres: failed
 
-### yaml-cpp
-
-If CMake reports that `yaml-cpp` cannot be found, install the development package for your
-platform and re-run configure from a clean build directory. On Ubuntu/Debian the package is
-`libyaml-cpp-dev`; on Arch/Manjaro and Homebrew it is `yaml-cpp`.
-
-```bash
-rm -rf build
-cmake -S . -B build
 ```
 
-If yaml-cpp is installed in a custom prefix, point CMake at it with `CMAKE_PREFIX_PATH`:
+and fail the command.
 
-```bash
-cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/prefix
+
+
+
+## Generation model
+
+### Foreign-key dependency ordering
+
+Foreign keys create a generation-order problem.
+
+-   If `orders.user_id` references `users.id`, then `users` must be generated before `orders`.
+-   If `order_items.order_id` references `orders.id`, then `orders` must be generated before `order_items`.
+
+SchemaForge models these table dependencies as a graph and emits tables in foreign-key-safe order.
+
+```
+users -> orders -> order_items
+
 ```
 
-### Hyrise SQL Parser
+### Key source registration
 
-SchemaForge vendors the Hyrise SQL parser under `external/sql-parser`. If configure or build fails
-because files are missing, initialize submodules:
+-   Parent primary-key and unique-key values become registered key sources.
+-   Child foreign-key columns sample from those registered parent values rather than generating unrelated random values.
+-   For composite foreign keys, SchemaForge samples the full referenced tuple together so child rows preserve the complete relationship.
 
-```bash
-git submodule update --init --recursive
-```
+### Unique capacity checks
 
-If the parser build itself fails, run it directly to see the Makefile error:
+Some schemas/configs cannot generate the requested number of unique rows.
 
-```bash
-make -C external/sql-parser
-```
+Examples:
 
-Then re-run `cmake --build build`.
+-   `BOOLEAN UNIQUE` can produce at most two non-null values.
+-   `CHAR(1) UNIQUE` has a finite capacity.
+-   `CHECK (status IN (...))` limits the domain.
+-   Composite unique constraints multiply finite domains.
+-   A child table cannot request rows when the referenced parent table has zero rows.
 
-### SQLite
+SchemaForge detects these cases before generation.
 
-SQLite validation needs both the SQLite runtime and development headers. On Ubuntu/Debian install
-`sqlite3 libsqlite3-dev`; on Arch/Manjaro install `sqlite`; on macOS Homebrew install `sqlite`.
-If CMake reports `SQLite3` missing, install those packages and configure again from a clean build
-directory.
+## Benchmarks
 
-### PostgreSQL Docker Validation
+Representative local benchmark run. Timing, throughput, output size, and peak memory vary by machine.
 
-PostgreSQL validation is optional and requires Docker. If Docker is not installed, not running, or
-the current user cannot access the Docker daemon, generation still succeeds and the benchmark
-reports `postgres: unavailable`. Start Docker, verify `docker version` works, and retry for full
-PostgreSQL validation. On macOS this requires Docker Desktop.
 
-## Tests
+| Case | Rows | Output | Generation time | Throughput | Output size | Peak memory | Validation | 
+|---|---|---|---|---|---|---|---| 
+| single_table_1m | 1,000,000 | SQL | 6.706 s | 149,122 rows/sec | 125.0 MiB | 5.5 MiB | SQLite skipped |
+ | users_orders_1m | 1,100,000 | SQL | 11.878 s | 92,609 rows/sec | 152.9 MiB | 136.8 MiB | SQLite passed in 5.268 s | 
+ | ecommerce_large | 1,610,000 | SQL | 10.938 s | 147,195 rows/sec | 191.6 MiB | 5.7 MiB | SQLite skipped |
 
-```bash
-scripts/run_integration_tests.sh
-```
-
-Valid test outputs and benchmark reports are written to `tests/artifacts/`.
-
-## Final Demo And Architecture
-
-For a compact portfolio/demo run covering SQL, CSV, PostgreSQL COPY, validation, deterministic
-output, constraints, foreign-key ordering, composite keys, and benchmark reporting, see
-`examples/final_demo/`.
-
-For the internal pipeline and design rationale, see `docs/architecture.md`.
-
-## Large-Scale Benchmarks
-
-Build SchemaForge, then run all benchmark examples from the repository root:
+Run all benchmark examples:
 
 ```bash
 make build
 scripts/run_benchmarks.sh
+
 ```
 
-Run one or more selected cases by name:
+Run selected cases:
 
 ```bash
 scripts/run_benchmarks.sh single_table_1m
 scripts/run_benchmarks.sh users_orders_1m ecommerce_large
+
 ```
 
-The examples cover one million rows in a single table, 1.1 million parent-child rows with SQLite
-foreign-key validation, and a 1.61 million-row e-commerce dependency graph. The runner prints row
-count, generation time, throughput, output size, peak process memory, and SQLite status. Detailed
-schemas, configs, and notes live under `examples/benchmarks/`.
+The benchmark examples cover:
 
-Generated SQL, reports, and logs are retained under `benchmark-results/` and are ignored by Git.
-Running every case can use several hundred MiB of disk space. Remove the artifacts with:
+-   one million rows in a single table
+-   1.1 million parent-child rows with SQLite foreign-key validation
+-   a 1.61 million-row e-commerce dependency graph
+
+The runner prints row count, generation time, throughput, output size, peak process memory, and validation status.
+
+Detailed schemas, configs, and notes live under:
+
+```
+examples/benchmarks/
+
+```
+
+Generated SQL, reports, and logs are retained under:
+
+```
+benchmark-results/
+
+```
+
+Remove generated benchmark artifacts with:
 
 ```bash
 rm -rf benchmark-results
+
 ```
 
-Peak memory is process-wide RSS. For `users_orders_1m`, it includes the in-memory SQLite validation
-database; the other two cases disable SQLite so their memory figures focus on generation.
+Peak memory is process-wide RSS. For `users_orders_1m`, the reported memory includes the in-memory SQLite validation database; the other benchmark cases disable SQLite so memory usage focuses on generation.
 
-## Supported Features
+## Supported SQL and types
 
-- Parses SQL `CREATE TABLE` schemas.
-- Supports `PRIMARY KEY`, `UNIQUE`, and `FOREIGN KEY` constraints.
-- Supports single-column and composite primary keys.
-- Supports single-column and composite unique constraints.
-- Supports foreign keys that reference primary-key or unique columns.
-- Orders tables by foreign-key dependencies before generating rows.
-- Generates deterministic SQL `INSERT` data from a seed.
-- Supports configurable default row counts and per-table row counts.
-- Supports per-column numeric ranges, value lists, and null probabilities.
-- Supports opt-in seeded realistic names, contact details, addresses, commerce values, text, and
-  valid temporal values.
-- Writes an editable YAML config for schema path, output path, benchmark path, SQLite validation,
-  default rows, and per-table rows.
-- Generates values for `INT`, `SMALLINT`, `BIGINT`, `TEXT`, `VARCHAR`, `CHAR`, `DECIMAL`,
-  `FLOAT`, `DOUBLE`, `REAL`, `BOOLEAN`, `DATE`, `DATETIME`, and `TIME`.
-- Supports simple `CHECK` constraints for numeric ranges, `BETWEEN`, numeric `IN`, and text `IN`.
-- Optionally validates generated SQL in SQLite.
-- Streams one headered CSV file per table with typed value formatting and CSV escaping.
-- Streams transactional PostgreSQL `COPY FROM STDIN` output for high-throughput imports.
-- Writes benchmark metrics for generated rows, generation time, throughput, output file size,
-  validation time, total command time, and Linux peak process memory usage.
-- Includes a complex marketplace test fixture for multi-table generation.
+### Supported schema features
 
-## Validation Coverage
+-   SQL CREATE TABLE
+-   PRIMARY KEY
+-   composite PRIMARY KEY
+-   UNIQUE
+-   composite UNIQUE
+-   FOREIGN KEY
+-   composite FOREIGN KEY
+-   NOT NULL
+-   nullable columns
+-   simple CHECK constraints
 
-SchemaForge validates schema, config, and generation feasibility with aggregated errors instead of
-stopping at the first issue.
+### Generated SQL types
 
-- Missing schema paths and missing schema files.
-- Known unsupported column types, including `JSON`, `UUID`, `ARRAY`, `BLOB`, `ENUM`, and `INET`.
-- Duplicate table names and duplicate column names.
-- Primary-key constraints that reference missing columns.
-- Unique constraints that reference missing columns.
-- Foreign keys with missing local columns, missing referenced tables, or missing referenced columns.
-- Foreign keys with mismatched local and referenced column counts.
-- Foreign keys with mismatched local and referenced column types.
-- Foreign keys that do not reference a `PRIMARY KEY` or `UNIQUE` constraint.
-- Dependency cycles between tables.
-- Self-referencing foreign keys, which are not supported yet.
-- Unsupported generation types.
-- Unsupported `CHECK` constraint expressions.
-- Primary-key generation types outside `INT`, `BIGINT`, `SMALLINT`, `TEXT`, `VARCHAR`, and `CHAR`.
-- Foreign-key generation types outside `INT`, `BIGINT`, `SMALLINT`, `TEXT`, and `VARCHAR`.
-- YAML config entries that reference unknown tables.
-- Child tables that request rows while a referenced parent table has 0 rows.
-- Row-count requests that exceed finite unique capacities, including `BOOLEAN`, `CHAR(n)`, limited
-  `CHECK` domains, composite unique domains, and unique foreign keys.
+SchemaForge generates values for:
+
+-   INT
+-   SMALLINT
+-   BIGINT
+-   TEXT
+-   VARCHAR
+-   CHAR
+-   DECIMAL
+-   FLOAT
+-   DOUBLE
+-   REAL
+-   BOOLEAN
+-   DATE
+-   DATETIME
+-   TIME
+
+### Known unsupported / rejected types
+
+The validator rejects known unsupported types such as:
+
+-   JSON
+-   UUID
+-   ARRAY
+-   BLOB
+-   ENUM
+-   INET
+
+## Troubleshooting
+
+### yaml-cpp not found
+
+Install the development package for your platform and re-run CMake from a clean build directory.
+
+Ubuntu/Debian:
+
+```bash
+sudo apt install libyaml-cpp-dev
+
+```
+
+Arch/Manjaro:
+
+```bash
+sudo pacman -S yaml-cpp
+
+```
+
+macOS:
+
+```bash
+brew install yaml-cpp
+
+```
+
+Then:
+
+```bash
+rm -rf build
+cmake -S . -B build
+
+```
+
+If yaml-cpp is installed in a custom prefix:
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/prefix
+
+```
+
+### Hyrise SQL Parser files missing
+
+Initialize submodules:
+
+```bash
+git submodule update --init --recursive
+
+```
+
+If the parser build fails, run it directly to see the Makefile error:
+
+```bash
+make -C external/sql-parser
+
+```
+
+Then rebuild SchemaForge:
+
+```bash
+cmake --build build
+
+```
+
+### SQLite missing
+
+SQLite validation needs both the SQLite runtime and development headers.
+
+Ubuntu/Debian:
+
+```bash
+sudo apt install sqlite3 libsqlite3-dev
+
+```
+
+Arch/Manjaro:
+
+```bash
+sudo pacman -S sqlite
+
+```
+
+macOS:
+
+```bash
+brew install sqlite
+
+```
+
+### PostgreSQL Docker validation unavailable
+
+PostgreSQL validation is optional and requires Docker.
+
+If Docker is not installed, not running, or the current user cannot access the Docker daemon, generation still succeeds and the benchmark reports:
+
+```
+postgres: unavailable
+
+```
+
+Verify Docker access:
+
+```bash
+docker version
+
+```
+
+On macOS, this requires Docker Desktop.
+
+## Limitations and future work
+
+### Current limitations
+
+-   Only a subset of SQL DDL is supported.
+-   Self-referencing foreign keys are rejected.
+-   Dependency cycles between tables are rejected.
+-   Some SQL types are intentionally unsupported.
+-   CHECK support is limited to supported numeric/text expressions.
+-   SQLite validation is skipped for CSV and PostgreSQL COPY output.
+-   PostgreSQL validation requires Docker.
+-   Target PostgreSQL tables must already exist before importing generated COPY output.
+-   Benchmark numbers are local-machine dependent.
+-   Realistic data generation uses deterministic built-in data rather than an external faker library.
+
+### Possible enhancements
+
+-   Broader SQL dialect support.
+-   More complete CHECK expression evaluation.
+-   MySQL/MariaDB output and validation.
+-   More realistic domain-specific data generation.
+-   Async producer-consumer generation pipeline with bounded queues.
+-   Parallel generation where dependency ordering allows it.
+-   More detailed reporting for insufficient generation domains.
+-   Stage-level benchmarks for parse, validate, generate, write, and database validation.
+-   Release binaries or package-manager distribution.
+
+## Extending the codebase
+
+### Add a new SQL type
+
+1.  Extend the internal SQL type model under `include/schemaforge/schema/`.
+2.  Add parser adapter mapping under `include/schemaforge/parser/` and the corresponding `src/` implementation.
+3.  Add config validation rules under `include/schemaforge/validation/`.
+4.  Add deterministic generation behavior under `include/schemaforge/generator/` and `src/generator/`.
+5.  Add formatting support in SQL, CSV, and PostgreSQL COPY writers.
+6.  Add validation fixtures and output-format tests.
+
+### Add a new constraint
+
+1.  Extend the internal constraint model.
+2.  Add parser adapter conversion.
+3.  Add schema/config validation.
+4.  Add generation feasibility checks.
+5.  Add generation-time enforcement.
+6.  Add database validation fixtures.
+
+### Add a new output format
+
+1.  Implement a writer backend under the output module.
+2.  Preserve table generation order.
+3.  Preserve deterministic row ordering.
+4.  Define formatting rules for every supported SQL type.
+5.  Decide whether SQLite/PostgreSQL validation applies.
+6.  Add benchmark output-size reporting.
+7.  Add integration tests.
+
+### Add a new validation backend
+
+1.  Add validation config options.
+2.  Execute/import the schema.
+3.  Import generated output.
+4.  Verify configured table row counts.
+5.  Surface passed, failed, or unavailable status.
+6.  Ensure optional validation failure modes are handled consistently.
+
+## Statistics
+
+
+| Metric | Value | 
+|---|---| 
+| Public module groups | benchmark, config, domain, generator, graph, io, output, parser, schema, validation | 
+| Large benchmark cases | single_table_1m, users_orders_1m, ecommerce_large | 
+| Largest benchmark fixture | 1.61 million generated rows | 
+| Output formats | SQL INSERT, CSV, PostgreSQL COPY | 
+| Validation backends | SQLite, PostgreSQL via Docker | 
+| Main scripts | integration tests, benchmark runner, PostgreSQL validation tests | 
+| External parser | Hyrise SQL Parser submodule |
+
+To refresh file/line counts locally:
+
+```bash
+find include src -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.cc' -o -name '*.cpp' \) | wc -l
+find tests -type f | wc -l
+cloc include src tests
+
+```
+
+## License and references
+
+SchemaForge is an educational systems project for exploring database-aware test-data generation in C++.
+
+Useful references and technologies:
+
+-   C++ standard library
+-   CMake
+-   Hyrise SQL Parser
+-   SQLite
+-   PostgreSQL COPY
+-   Docker
+-   YAML / yaml-cpp
+-   Relational database constraints
+-   Dependency graphs and topological ordering
+-   Deterministic test-data generation
