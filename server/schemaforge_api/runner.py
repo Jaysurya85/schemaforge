@@ -1,6 +1,7 @@
 """File-based adapter for SchemaForge's existing CLI."""
 
 import csv
+import hashlib
 import os
 import shutil
 import subprocess
@@ -222,6 +223,45 @@ def render_generation_config(config: dict[str, Any]) -> str:
     return yaml.safe_dump(config, sort_keys=False)
 
 
+def prepare_config(request: RunRequest) -> dict[str, Any]:
+    """Save and preflight the exact YAML that can later be executed."""
+    run_id = uuid.uuid4().hex
+    directory = run_root() / run_id
+    directory.mkdir(parents=True, exist_ok=False)
+    try:
+        config = compose_generation_config(request, directory)
+        rendered = render_generation_config(config)
+        config_path = directory / "schemaforge.yaml"
+        config_path.write_text(rendered, encoding="utf-8")
+        call_engine(["validate", "--config", str(config_path)])
+        (directory / "draft_request.json").write_text(request.model_dump_json(by_alias=True), encoding="utf-8")
+        (directory / "draft_sha256").write_text(hashlib.sha256(rendered.encode()).hexdigest(), encoding="utf-8")
+        return {"id": run_id, "yaml": rendered, "request": request.model_dump(by_alias=True)}
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+
+
+def generate_prepared(run_id: str) -> dict[str, Any]:
+    """Execute only a preflighted, unchanged draft."""
+    if len(run_id) != 32 or any(character not in "0123456789abcdef" for character in run_id):
+        raise EngineError("Draft not found.")
+    directory = run_root() / run_id
+    config_path = directory / "schemaforge.yaml"
+    metadata = directory / "draft_request.json"
+    digest = directory / "draft_sha256"
+    if not all(path.is_file() for path in (config_path, metadata, digest)):
+        raise EngineError("Draft not found.")
+    if (directory / "result.yaml").exists():
+        raise EngineError("This draft has already been generated.")
+    rendered = config_path.read_text(encoding="utf-8")
+    if hashlib.sha256(rendered.encode()).hexdigest() != digest.read_text(encoding="utf-8"):
+        raise EngineError("The reviewed configuration changed. Preview it again.")
+    request = RunRequest.model_validate_json(metadata.read_text(encoding="utf-8"))
+    config = yaml.safe_load(rendered)
+    return _execute_config(run_id, directory, request, config)
+
+
 def generate(request: RunRequest) -> dict[str, Any]:
     run_id = uuid.uuid4().hex
     directory = run_root() / run_id
@@ -231,34 +271,39 @@ def generate(request: RunRequest) -> dict[str, Any]:
 
         config_path = directory / "schemaforge.yaml"
         config_path.write_text(render_generation_config(config), encoding="utf-8")
-        log = call_engine(["generate", "--config", str(config_path)])
-        if request.output_format == "csv":
-            files = sorted((directory / "csv").glob("*.csv"))
-            if not files:
-                raise EngineError("SchemaForge did not create CSV output.", log)
-            artifact = Path(shutil.make_archive(str(directory / "output"), "zip", directory / "csv"))
-        else:
-            artifact = Path(config["output"]["file"])
-            files = [artifact]
-        if not artifact.is_file():
-            raise EngineError("SchemaForge did not create the output artifact.", log)
-        benchmark = directory / "benchmark.yaml"
-        metrics = yaml.safe_load(benchmark.read_text(encoding="utf-8")) if benchmark.is_file() else {}
-        result = {
-            "id": run_id,
-            "status": "completed",
-            "format": request.output_format,
-            "tables": [{"name": name, "rows": settings.get("rows", request.default_rows)} for name, settings in config["tables"].items()],
-            "previews": [preview_file(path) for path in files],
-            "metrics": metrics or {},
-            "log": log,
-            "download_name": artifact.name,
-        }
-        (directory / "result.yaml").write_text(yaml.safe_dump(result, sort_keys=False), encoding="utf-8")
-        return result
+        return _execute_config(run_id, directory, request, config)
     except Exception:
         shutil.rmtree(directory, ignore_errors=True)
         raise
+
+
+def _execute_config(run_id: str, directory: Path, request: RunRequest, config: dict[str, Any]) -> dict[str, Any]:
+    config_path = directory / "schemaforge.yaml"
+    log = call_engine(["generate", "--config", str(config_path)])
+    if request.output_format == "csv":
+        files = sorted((directory / "csv").glob("*.csv"))
+        if not files:
+            raise EngineError("SchemaForge did not create CSV output.", log)
+        artifact = Path(shutil.make_archive(str(directory / "output"), "zip", directory / "csv"))
+    else:
+        artifact = Path(config["output"]["file"])
+        files = [artifact]
+    if not artifact.is_file():
+        raise EngineError("SchemaForge did not create the output artifact.", log)
+    benchmark = directory / "benchmark.yaml"
+    metrics = yaml.safe_load(benchmark.read_text(encoding="utf-8")) if benchmark.is_file() else {}
+    result = {
+        "id": run_id,
+        "status": "completed",
+        "format": request.output_format,
+        "tables": [{"name": name, "rows": settings.get("rows", request.default_rows)} for name, settings in config["tables"].items()],
+        "previews": [preview_file(path) for path in files],
+        "metrics": metrics or {},
+        "log": log,
+        "download_name": artifact.name,
+    }
+    (directory / "result.yaml").write_text(yaml.safe_dump(result, sort_keys=False), encoding="utf-8")
+    return result
 
 
 def read_run(run_id: str) -> dict[str, Any] | None:

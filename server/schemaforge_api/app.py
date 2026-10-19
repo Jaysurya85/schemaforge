@@ -8,7 +8,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .models import RunRequest, SchemaRequest
-from .runner import EngineError, binary_path, call_engine, download_path, generate, inspect_schema, read_run
+from .runner import (EngineError, binary_path, call_engine, download_path, generate,
+                     generate_prepared, inspect_schema, prepare_config, read_run)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,6 +71,22 @@ def inspect(request: SchemaRequest) -> dict[str, object]:
 def create_run(request: RunRequest) -> dict[str, object]:
     try:
         return generate(request)
+    except EngineError as error:
+        raise engine_http_error(error) from error
+
+
+@app.post("/api/configs/preview")
+def preview_config(request: RunRequest) -> dict[str, object]:
+    try:
+        return prepare_config(request)
+    except EngineError as error:
+        raise engine_http_error(error) from error
+
+
+@app.post("/api/configs/{draft_id}/generate")
+def generate_config(draft_id: str) -> dict[str, object]:
+    try:
+        return generate_prepared(draft_id)
     except EngineError as error:
         raise engine_http_error(error) from error
 

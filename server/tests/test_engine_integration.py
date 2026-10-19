@@ -47,6 +47,42 @@ def test_validate_command_checks_capacity_without_writing_output(tmp_path: Path)
     assert not output_path.exists()
 
 
+def test_preview_executes_exact_reviewed_yaml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    request = {"sql": "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT);",
+               "tables": {"items": {"rows": 3}}, "validate_with": "none"}
+    preview = client.post("/api/configs/preview", json=request)
+    assert preview.status_code == 200, preview.text
+    draft = preview.json()
+    config_path = tmp_path / "runs" / draft["id"] / "schemaforge.yaml"
+    assert config_path.read_text() == draft["yaml"]
+    assert not (tmp_path / "runs" / draft["id"] / "output.sql").exists()
+    result = client.post(f"/api/configs/{draft['id']}/generate")
+    assert result.status_code == 200, result.text
+    assert result.json()["tables"] == [{"name": "items", "rows": 3}]
+    assert config_path.read_text() == draft["yaml"]
+    assert client.post(f"/api/configs/{draft['id']}/generate").status_code == 422
+
+
+def test_invalid_or_changed_preview_cannot_generate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    invalid = client.post("/api/configs/preview", json={
+        "sql": "CREATE TABLE items (id INTEGER PRIMARY KEY);",
+        "tables": {"items": {"rows": 100, "columns": {"id": {"min": 2, "max": 10}}}},
+    })
+    assert invalid.status_code == 422
+    assert "Cannot generate 100 rows" in invalid.json()["detail"]["errors"][0]
+    assert list((tmp_path / "runs").iterdir()) == []
+
+    preview = client.post("/api/configs/preview", json={"sql": "CREATE TABLE items (id INTEGER PRIMARY KEY);"})
+    assert preview.status_code == 200
+    draft_id = preview.json()["id"]
+    config_path = tmp_path / "runs" / draft_id / "schemaforge.yaml"
+    config_path.write_text(config_path.read_text() + "\n# changed\n")
+    changed = client.post(f"/api/configs/{draft_id}/generate")
+    assert changed.status_code == 422
+    assert "changed" in changed.json()["detail"]["message"]
+
 def test_inspection_returns_only_real_columns() -> None:
     response = client.post(
         "/api/schemas/inspect",
