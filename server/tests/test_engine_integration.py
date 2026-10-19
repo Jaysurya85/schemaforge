@@ -50,7 +50,9 @@ def test_ai_endpoint_returns_review_draft_without_generation(monkeypatch: pytest
                      unapplied=[{"request": "normal distribution", "reason": "unsupported_distribution",
                                  "explanation": "Only constraints are available."}])
     monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(plan))
-    response = client.post("/api/ai/plan", json=planning_body())
+    body = planning_body()
+    body["testing_goal"] = "Generate 4 customers with gold or silver tiers."
+    response = client.post("/api/ai/plan", json=body)
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["plan"]["unapplied"][0]["reason"] == "unsupported_distribution"
@@ -61,6 +63,31 @@ def test_ai_endpoint_returns_review_draft_without_generation(monkeypatch: pytest
     assert generated.status_code == 200, generated.text
     assert generated.json()["metrics"]["generation"]["total_rows"] == 4
     assert (tmp_path / "runs" / data["draft"]["id"] / "schemaforge.yaml").read_text() == data["draft"]["yaml"]
+
+
+def test_ai_endpoint_retries_a_plan_that_changes_an_explicit_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+
+    class RetryProvider:
+        def __init__(self):
+            self.feedback = []
+
+        def propose(self, **kwargs):
+            self.feedback.append(kwargs["feedback"])
+            rows = 10 if len(self.feedback) == 1 else 4
+            return AIPlan.model_validate(base_plan(table_rows=[{"table": "customers", "rows": rows}]))
+
+    provider = RetryProvider()
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: provider)
+    body = planning_body()
+    body["testing_goal"] = "Generate 4 customers."
+    response = client.post("/api/ai/plan", json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["draft"]["request"]["tables"]["customers"]["rows"] == 4
+    assert provider.feedback[0] is None
+    assert "requested 4 rows" in provider.feedback[1]
 
 
 def test_ambiguous_ai_request_is_visible_but_does_not_change_settings(
@@ -87,7 +114,12 @@ def test_ai_endpoint_rejects_unexecutable_plans(monkeypatch: pytest.MonkeyPatch,
                                                  plan: dict, error: str) -> None:
     monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(plan))
-    response = client.post("/api/ai/plan", json=planning_body())
+    body = planning_body()
+    if error == "Cannot generate 100 rows":
+        body["testing_goal"] = "Generate 100 customers with ids from 2 to 10."
+    elif error == "Unknown column":
+        body["testing_goal"] = "Set missing from 1 to 4."
+    response = client.post("/api/ai/plan", json=body)
     assert response.status_code == 422
     assert error in str(response.json()["detail"])
 

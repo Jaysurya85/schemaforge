@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from .ai_plan import PlanApplicationError, apply_ai_plan
+from .ai_plan import PlanApplicationError, apply_ai_plan, check_explicit_requests
 from .model_provider import NaviGatorProvider, OpenAIProvider, PlanProvider, ProviderError
 from .models import RunRequest, SchemaRequest
 from .runner import (EngineError, binary_path, call_engine, download_path, generate,
@@ -114,9 +114,19 @@ def generate_config(draft_id: str) -> dict[str, object]:
 def create_ai_plan(body: PlanningRequest) -> dict[str, object]:
     try:
         inspection = inspect_schema(body.request)
-        plan = planning_provider().propose(
-            sql=body.request.sql, request=body.testing_goal, inspection=inspection,
-            current=body.request.model_dump(by_alias=True))
+        provider = planning_provider()
+        feedback: str | None = None
+        for attempt in range(2):
+            plan = provider.propose(
+                sql=body.request.sql, request=body.testing_goal, inspection=inspection,
+                current=body.request.model_dump(by_alias=True), feedback=feedback)
+            try:
+                check_explicit_requests(body.testing_goal, plan, inspection)
+                break
+            except PlanApplicationError as error:
+                if attempt:
+                    raise
+                feedback = str(error)
         applied = apply_ai_plan(body.request, plan, inspection)
         draft = prepare_config(applied)
         return {"plan": plan.model_dump(), "draft": draft}

@@ -1,6 +1,7 @@
 """Strict AI proposal contract and deterministic mapping to run settings."""
 
 import math
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
@@ -107,6 +108,68 @@ class AIPlan(ProposalModel):
 
 class PlanApplicationError(ValueError):
     """A well-formed proposal cannot be applied to this inspected schema."""
+
+
+def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any]) -> None:
+    """Fail closed when a proposal contradicts simple numeric user instructions."""
+    errors: list[str] = []
+    for item in plan.number_ranges:
+        minimum, maximum = re.escape(format(item.min, "g")), re.escape(format(item.max, "g"))
+        pair = rf"(?:\b{minimum}\s*(?:to|-)\s*{maximum}\b|\bbetween\s+{minimum}\s+and\s+{maximum}\b)"
+        if not re.search(pair, goal, re.IGNORECASE):
+            errors.append(f"AI plan invented a numeric range for {item.table}.{item.column}.")
+    for item in plan.value_lists:
+        for value in item.values:
+            rendered = format(value, "g") if isinstance(value, (int, float)) and not isinstance(value, bool) else str(value)
+            if not re.search(rf"(?<!\w){re.escape(rendered)}(?!\w)", goal, re.IGNORECASE):
+                errors.append(f"AI plan invented a value for {item.table}.{item.column}.")
+                break
+    for match in re.finditer(r"\b\d+(?:\.\d+)?\s*%", goal):
+        context = goal[match.end():].split(".", 1)[0][:80]
+        if re.search(r"\bnull\b", context, re.IGNORECASE):
+            continue
+        percentage = match.group().strip()
+        if not any(item.reason == "unsupported_distribution" and percentage in item.request
+                   for item in plan.unapplied):
+            errors.append(f"AI plan did not mark the requested {percentage} distribution as unsupported.")
+
+    proposed_rows = {item.table: item.rows for item in plan.table_rows}
+    proposed_nulls = {(item.table, item.column): item.probability for item in plan.null_rates}
+    matched_nulls: set[tuple[str, str]] = set()
+    for table in inspection["tables"]:
+        name = table["name"]
+        quoted = re.escape(name)
+        patterns = (
+            rf"\b(\d[\d,]*)\s+(?:rows?\s+(?:of|for|in)\s+)?{quoted}\b",
+            rf"\b{quoted}\s+(?:with|for|of|at)\s+(\d[\d,]*)\s+rows?\b",
+        )
+        counts = {int(match.group(1).replace(",", "")) for pattern in patterns
+                  for match in re.finditer(pattern, goal, re.IGNORECASE)}
+        if len(counts) > 1:
+            errors.append(f"Conflicting row counts requested for {name}.")
+        expected = next(iter(counts), None)
+        proposed = proposed_rows.get(name)
+        if expected is not None and proposed != expected:
+            errors.append(f"AI plan did not preserve the requested {expected} rows for {name}.")
+        if expected is None and proposed is not None:
+            errors.append(f"AI plan invented a row count for {name}.")
+
+        for column in table["column_types"]:
+            field = re.escape(column).replace("_", r"[ _]")
+            pattern = rf"\b(\d+(?:\.\d+)?)\s*%\s+of\s+(?:the\s+)?{field}\b(?:\s+\w+){{0,3}}\s+null\b"
+            matches = list(re.finditer(pattern, goal, re.IGNORECASE))
+            if not matches:
+                continue
+            matched_nulls.add((name, column))
+            expected_rate = float(matches[-1].group(1)) / 100
+            actual_rate = proposed_nulls.get((name, column))
+            if actual_rate is None or not math.isclose(actual_rate, expected_rate):
+                errors.append(
+                    f"AI plan did not preserve the requested {matches[-1].group(1)}% null rate for {name}.{column}.")
+    for table_name, column_name in proposed_nulls.keys() - matched_nulls:
+        errors.append(f"AI plan invented a null rate for {table_name}.{column_name}.")
+    if errors:
+        raise PlanApplicationError(" ".join(errors))
 
 
 def apply_ai_plan(request: RunRequest, plan: AIPlan, inspection: dict[str, Any]) -> RunRequest:

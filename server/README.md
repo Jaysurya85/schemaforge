@@ -47,7 +47,11 @@ Keep API keys out of the browser, source files, Git, and logs. Without a key,
 manual generation and config preview still work, while AI planning returns a
 clear setup error. Model output is treated
 as a proposal: a strict response schema, Pydantic checks, schema-name and type
-checks, and the C++ validation-only preflight all run before a draft is offered.
+checks, checks against explicit counts, ranges, values, and null percentages in
+the request, and the C++ validation-only preflight all run before a draft is
+offered. If the proposal contradicts those explicit details, the server asks
+the model to correct it once; a second contradiction returns a validation
+error instead of a misleading draft.
 The provider adapter is replaceable for offline tests. The current engine can
 apply constraints, not probability distributions; those requests appear in
 `unapplied` instead of being represented as generated behavior.

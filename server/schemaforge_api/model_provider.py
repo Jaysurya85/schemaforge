@@ -17,7 +17,7 @@ class ProviderError(Exception):
 
 class PlanProvider(Protocol):
     def propose(self, *, sql: str, request: str, inspection: dict[str, Any],
-                current: dict[str, Any]) -> AIPlan: ...
+                current: dict[str, Any], feedback: str | None = None) -> AIPlan: ...
 
 
 def _object(properties: dict[str, Any]) -> dict[str, Any]:
@@ -49,19 +49,31 @@ SYSTEM_PROMPT = (
     "You plan constraint-valid test data for SchemaForge. Return JSON matching the schema. "
     "Use only inspected table and column names, and only supported table rows, numeric ranges, "
     "value lists, and null rates. Do not claim distributions or relationship patterns are "
-    "implemented; put those requests in unapplied. State assumptions. If a request is ambiguous "
-    "or impossible, put it in unapplied rather than inventing a rule. Never emit SQL or YAML."
+    "implemented; put explicitly requested unsupported behavior in unapplied. "
+    "Copy every explicit numeric row count, numeric range, and null percentage exactly. "
+    "Do not add row counts, ranges, value lists, or null rates that the user did not request. "
+    "Never guess a row count from words like small or medium. "
+    "A list of allowed categories does not imply a percentage distribution; do not mark an "
+    "unstated distribution as unapplied. Do not turn requested percentages into literal values. "
+    "Apply supported parts of a request even if another part is unsupported. "
+    "State only necessary assumptions. If a requested behavior is ambiguous or impossible, "
+    "put that specific request in unapplied rather than inventing a rule. Never emit SQL or YAML."
 )
 
 
 def planning_messages(sql: str, request: str, inspection: dict[str, Any],
-                      current: dict[str, Any]) -> list[dict[str, str]]:
-    return [
+                      current: dict[str, Any], feedback: str | None = None) -> list[dict[str, str]]:
+    messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps({
             "schema": sql, "inspection": inspection, "current_settings": current,
             "testing_request": request}, ensure_ascii=False)},
     ]
+    if feedback:
+        messages.append({"role": "user", "content": (
+            f"The previous proposal failed validation: {feedback} "
+            "Return a corrected proposal that follows the original testing request exactly.")})
+    return messages
 
 
 class OpenAIProvider:
@@ -70,14 +82,14 @@ class OpenAIProvider:
         self.model = model or os.environ.get("SCHEMAFORGE_OPENAI_MODEL", "gpt-4o-mini")
 
     def propose(self, *, sql: str, request: str, inspection: dict[str, Any],
-                current: dict[str, Any]) -> AIPlan:
+                current: dict[str, Any], feedback: str | None = None) -> AIPlan:
         if not self.api_key:
             raise ProviderError("Set OPENAI_API_KEY on the server to enable AI planning.")
         payload = {
             "model": self.model,
             "store": False,
             "max_output_tokens": 3000,
-            "input": planning_messages(sql, request, inspection, current),
+            "input": planning_messages(sql, request, inspection, current, feedback),
             "text": {"format": {"type": "json_schema", "name": "schemaforge_plan",
                                 "strict": True, "schema": PLAN_SCHEMA}},
         }
@@ -117,12 +129,12 @@ class NaviGatorProvider:
         self.model = model or os.environ.get("SCHEMAFORGE_NAVIGATOR_MODEL", "gpt-oss-20b")
 
     def propose(self, *, sql: str, request: str, inspection: dict[str, Any],
-                current: dict[str, Any]) -> AIPlan:
+                current: dict[str, Any], feedback: str | None = None) -> AIPlan:
         if not self.api_key:
             raise ProviderError("Set NAVIGATOR_TOOLKIT_API_KEY on the server to enable NaviGator planning.")
         payload = {
             "model": self.model,
-            "messages": planning_messages(sql, request, inspection, current),
+            "messages": planning_messages(sql, request, inspection, current, feedback),
             "response_format": {"type": "json_schema", "json_schema": {
                 "name": "schemaforge_plan", "strict": True, "schema": PLAN_SCHEMA}},
         }

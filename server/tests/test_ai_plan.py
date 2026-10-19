@@ -7,7 +7,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from schemaforge_api.ai_plan import AIPlan, PlanApplicationError, apply_ai_plan
+from schemaforge_api.ai_plan import AIPlan, PlanApplicationError, apply_ai_plan, check_explicit_requests
 from schemaforge_api.models import ColumnSettings, RunRequest, TableSettings
 from schemaforge_api.runner import compose_generation_config, render_generation_config
 
@@ -106,3 +106,51 @@ def test_plan_rejects_unknown_or_wrongly_typed_targets(change: dict[str, object]
 def test_invalid_or_unsupported_proposal_shapes_are_rejected(change: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         plan_with(**change)
+
+
+def test_explicit_goal_numbers_must_survive_the_model_proposal() -> None:
+    goal = "Generate 1,000 customers and 3,000 orders. 5% of phone numbers can be null."
+    plan = plan_with(table_rows=[{"table": "customers", "rows": 1000},
+                                {"table": "orders", "rows": 3000}],
+                     null_rates=[{"table": "customers", "column": "phone", "probability": 0.05}])
+    check_explicit_requests(goal, plan, INSPECTION)
+    with pytest.raises(PlanApplicationError, match="requested 1000 rows"):
+        check_explicit_requests(goal, plan_with(table_rows=[{"table": "customers", "rows": 10},
+                                                 {"table": "orders", "rows": 3000}],
+                                               null_rates=plan.null_rates), INSPECTION)
+    with pytest.raises(PlanApplicationError, match="5% null rate"):
+        check_explicit_requests(goal, plan_with(table_rows=plan.table_rows), INSPECTION)
+
+
+def test_vague_size_cannot_create_an_unrequested_row_count() -> None:
+    with pytest.raises(PlanApplicationError, match="invented a row count"):
+        check_explicit_requests("Make a medium-sized customer dataset.",
+                                plan_with(table_rows=[{"table": "customers", "rows": 50}]), INSPECTION)
+
+
+def test_plan_must_not_invent_ranges_values_or_null_rates() -> None:
+    with pytest.raises(PlanApplicationError, match="invented a numeric range"):
+        check_explicit_requests("Generate 5 customers.",
+                                plan_with(table_rows=[{"table": "customers", "rows": 5}],
+                                          number_ranges=[{"table": "customers", "column": "id", "min": 1, "max": 5}]),
+                                INSPECTION)
+    with pytest.raises(PlanApplicationError, match="invented a value"):
+        check_explicit_requests("Generate 5 customers.",
+                                plan_with(table_rows=[{"table": "customers", "rows": 5}],
+                                          value_lists=[{"table": "customers", "column": "phone", "values": ["unknown"]}]),
+                                INSPECTION)
+    with pytest.raises(PlanApplicationError, match="invented a null rate"):
+        check_explicit_requests("Generate 5 customers.",
+                                plan_with(table_rows=[{"table": "customers", "rows": 5}],
+                                          null_rates=[{"table": "customers", "column": "phone", "probability": 0}]),
+                                INSPECTION)
+
+
+def test_percentage_distribution_must_be_explicitly_deferred() -> None:
+    goal = "Generate 1000 customers. Exactly 10% should be premium."
+    rows = [{"table": "customers", "rows": 1000}]
+    with pytest.raises(PlanApplicationError, match="distribution as unsupported"):
+        check_explicit_requests(goal, plan_with(table_rows=rows), INSPECTION)
+    deferred = [{"request": "Exactly 10% should be premium", "reason": "unsupported_distribution",
+                 "explanation": "Weighted distributions are not supported."}]
+    check_explicit_requests(goal, plan_with(table_rows=rows, unapplied=deferred), INSPECTION)
