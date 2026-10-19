@@ -6,7 +6,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 
+from .ai_plan import PlanApplicationError, apply_ai_plan
+from .model_provider import OpenAIProvider, PlanProvider, ProviderError
 from .models import RunRequest, SchemaRequest
 from .runner import (EngineError, binary_path, call_engine, download_path, generate,
                      generate_prepared, inspect_schema, prepare_config, read_run)
@@ -42,6 +45,16 @@ def engine_http_error(error: EngineError) -> HTTPException:
         status_code=422,
         detail={"message": str(error), "errors": engine_messages(error), "log": error.log},
     )
+
+
+class PlanningRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request: RunRequest
+    testing_goal: str = Field(min_length=3, max_length=4_000)
+
+
+def planning_provider() -> PlanProvider:
+    return OpenAIProvider()
 
 
 @app.get("/api/health")
@@ -89,6 +102,24 @@ def generate_config(draft_id: str) -> dict[str, object]:
         return generate_prepared(draft_id)
     except EngineError as error:
         raise engine_http_error(error) from error
+
+
+@app.post("/api/ai/plan")
+def create_ai_plan(body: PlanningRequest) -> dict[str, object]:
+    try:
+        inspection = inspect_schema(body.request)
+        plan = planning_provider().propose(
+            sql=body.request.sql, request=body.testing_goal, inspection=inspection,
+            current=body.request.model_dump(by_alias=True))
+        applied = apply_ai_plan(body.request, plan, inspection)
+        draft = prepare_config(applied)
+        return {"plan": plan.model_dump(), "draft": draft}
+    except EngineError as error:
+        raise engine_http_error(error) from error
+    except PlanApplicationError as error:
+        raise HTTPException(status_code=422, detail={"message": str(error), "errors": [str(error)]}) from error
+    except ProviderError as error:
+        raise HTTPException(status_code=503, detail={"message": str(error), "errors": [str(error)]}) from error
 
 
 @app.get("/api/runs/{run_id}")

@@ -13,6 +13,7 @@ from schemaforge_api.app import app
 from schemaforge_api.models import RunRequest
 from schemaforge_api.runner import inspect_schema
 from schemaforge_api.runner import initial_config, render_generation_config
+from schemaforge_api.model_provider import ProviderError
 
 
 pytestmark = pytest.mark.skipif(
@@ -20,6 +21,65 @@ pytestmark = pytest.mark.skipif(
     reason="Set SCHEMAFORGE_BINARY to a native CLI to run integration checks",
 )
 client = TestClient(app)
+
+
+class FakeProvider:
+    def __init__(self, plan: dict | None = None, error: str | None = None):
+        self.plan, self.error = plan, error
+
+    def propose(self, **kwargs):
+        if self.error:
+            raise ProviderError(self.error)
+        return AIPlan.model_validate(self.plan)
+
+
+def base_plan(**overrides):
+    return {"version": 1, "table_rows": [], "number_ranges": [], "value_lists": [],
+            "null_rates": [], "assumptions": [], "unapplied": [], **overrides}
+
+
+def planning_body():
+    return {"request": {"sql": "CREATE TABLE customers (id INTEGER PRIMARY KEY, tier TEXT);",
+                        "validate_with": "none"}, "testing_goal": "Generate customers for testing"}
+
+
+def test_ai_endpoint_returns_review_draft_without_generation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    plan = base_plan(table_rows=[{"table": "customers", "rows": 4}],
+                     value_lists=[{"table": "customers", "column": "tier", "values": ["gold", "silver"]}],
+                     unapplied=[{"request": "normal distribution", "reason": "unsupported_distribution",
+                                 "explanation": "Only constraints are available."}])
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(plan))
+    response = client.post("/api/ai/plan", json=planning_body())
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["plan"]["unapplied"][0]["reason"] == "unsupported_distribution"
+    assert data["draft"]["request"]["tables"]["customers"]["rows"] == 4
+    assert "gold" in data["draft"]["yaml"]
+    assert not (tmp_path / "runs" / data["draft"]["id"] / "output.sql").exists()
+
+
+@pytest.mark.parametrize("plan,error", [
+    (base_plan(table_rows=[{"table": "missing", "rows": 4}]), "Unknown table"),
+    (base_plan(number_ranges=[{"table": "customers", "column": "missing", "min": 1, "max": 4}]), "Unknown column"),
+    (base_plan(table_rows=[{"table": "customers", "rows": 100}],
+               number_ranges=[{"table": "customers", "column": "id", "min": 2, "max": 10}]),
+     "Cannot generate 100 rows"),
+])
+def test_ai_endpoint_rejects_unexecutable_plans(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                 plan: dict, error: str) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(plan))
+    response = client.post("/api/ai/plan", json=planning_body())
+    assert response.status_code == 422
+    assert error in str(response.json()["detail"])
+
+
+def test_ai_endpoint_handles_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(error="Provider unavailable"))
+    response = client.post("/api/ai/plan", json=planning_body())
+    assert response.status_code == 503
+    assert response.json()["detail"]["message"] == "Provider unavailable"
 
 
 def test_validate_command_checks_capacity_without_writing_output(tmp_path: Path) -> None:
