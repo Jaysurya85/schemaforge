@@ -24,3 +24,21 @@ paths from a request.
 The initial implementation runs each job to completion before responding.
 The run ID and resource URLs allow later work to add asynchronous execution
 without changing the frontend's data model.
+
+## Run locally
+
+Build the C++ CLI for the current machine first. From the repository root:
+
+```sh
+python3 -m venv server/.venv
+server/.venv/bin/pip install -e 'server[test]'
+server/.venv/bin/uvicorn schemaforge_api.app:app --app-dir server --host 127.0.0.1 --port 8000
+```
+
+Set `SCHEMAFORGE_BINARY` if the executable is elsewhere. Set
+`SCHEMAFORGE_RUN_DIR` to choose where run artifacts are retained. The default
+is the operating system's temporary directory. The local API is available at
+`http://127.0.0.1:8000/api/health`; interactive API documentation is at
+`http://127.0.0.1:8000/docs`.
+
+Run the server tests with `server/.venv/bin/pytest server/tests`.
