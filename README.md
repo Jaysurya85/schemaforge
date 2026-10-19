@@ -10,6 +10,7 @@ SchemaForge is an educational systems project for practicing C++ beyond syntax: 
 -   [Stack and dependencies](#stack-and-dependencies)
 -   [Project structure](#project-structure)
 -   [Build](#build)
+-   [Web workspace and HTTP API](#web-workspace-and-http-api)
 -   [Testing](#testing)
 -   [Quick demo](#quick-demo)
 -   [Configuration](#configuration)
@@ -168,6 +169,8 @@ schemaforge/
 │   ├── run_benchmarks.sh
 │   ├── run_integration_tests.sh
 │   └── run_postgres_validation_tests.sh
+├── server/                        # FastAPI interface to the C++ CLI
+├── web/                           # React and TypeScript workspace
 ├── benchmark-results/              # Generated benchmark artifacts, ignored by Git
 ├── schemaforge.yaml                # Example/generated config
 ├── benchmark.yaml                  # Example/generated benchmark report
@@ -252,6 +255,40 @@ cmake --install build --prefix "$HOME/.local"
 "$HOME/.local/bin/schemaforge" --help
 
 ```
+
+## Web workspace and HTTP API
+
+The local website uses the same C++ CLI as the command line workflow. A FastAPI
+server runs the CLI for each request and exposes the same API to the browser or
+to `curl`. The website supports SQL schema inspection, row and column controls,
+SQL/CSV/PostgreSQL COPY output, preview, download, and the engine's validation
+results. It is designed for a laptop demo and binds to loopback by default.
+
+After building the CLI, start the API from the repository root:
+
+```bash
+python3 -m venv server/.venv
+server/.venv/bin/pip install -e 'server[test]'
+server/.venv/bin/uvicorn schemaforge_api.app:app --app-dir server --host 127.0.0.1 --port 8000
+```
+
+In a second terminal, start the frontend:
+
+```bash
+cd web
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the FastAPI server.
+For a single-server demo, run `pnpm build` in `web/` first, then open
+`http://127.0.0.1:8000`; FastAPI serves the built frontend if `web/dist` exists.
+Set `SCHEMAFORGE_BINARY` when the CLI is outside `build/schemaforge`, and see
+[server/README.md](server/README.md) for the HTTP contract and a `curl` example.
+
+On macOS, if this checkout still contains parser objects or `libsqlparser.so`
+from a Linux build, run `make -C external/sql-parser clean` before building the
+native CLI. A fresh clone does not need that extra step.
 
 ## Testing
 

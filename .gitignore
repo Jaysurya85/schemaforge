@@ -22,3 +22,4 @@ server/**/__pycache__/
 server/*.egg-info/
 web/node_modules/
 web/dist/
+web/*.tsbuildinfo

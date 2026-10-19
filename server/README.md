@@ -25,6 +25,15 @@ The initial implementation runs each job to completion before responding.
 The run ID and resource URLs allow later work to add asynchronous execution
 without changing the frontend's data model.
 
+For example, from another local terminal:
+
+```sh
+curl -s http://127.0.0.1:8000/api/health
+curl -s -X POST http://127.0.0.1:8000/api/schemas/inspect \
+  -H 'Content-Type: application/json' \
+  -d '{"sql":"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);","dialect":"sqlite","default_rows":10}'
+```
+
 ## Run locally
 
 Build the C++ CLI for the current machine first. From the repository root:
@@ -41,4 +50,10 @@ is the operating system's temporary directory. The local API is available at
 `http://127.0.0.1:8000/api/health`; interactive API documentation is at
 `http://127.0.0.1:8000/docs`.
 
-Run the server tests with `server/.venv/bin/pytest server/tests`.
+For a single-server website, run `pnpm install --frozen-lockfile` and
+`pnpm build` in `web/` before starting the API. The API serves `web/dist` at
+`http://127.0.0.1:8000` when the build exists. During frontend development,
+`pnpm dev` serves the site at `http://127.0.0.1:5173` and proxies API calls.
+
+Run the server tests with `server/.venv/bin/pytest server/tests`. Set
+`SCHEMAFORGE_BINARY` to a native executable to include the real-engine checks.

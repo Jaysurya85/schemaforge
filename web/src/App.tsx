@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownToLine, ArrowRight, Braces, Check, ChevronDown, CircleAlert,
   CircleCheck, Code2, Database, FileCode2, Github, LoaderCircle, Play,
-  Plus, RotateCcw, Settings2, Sparkles, Table2, Trash2, WandSparkles,
+  Moon, Plus, RotateCcw, Settings2, Sparkles, Sun, Table2, Trash2, WandSparkles,
 } from 'lucide-react'
 import { api, type ColumnSettings, type Dialect, type FilePreview, type OutputFormat, type RunResult, type TableSettings, type Validation } from './api'
 import './styles.css'
@@ -70,6 +70,7 @@ function App() {
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>({ table: '', column: '', type: 'values', value: '' })
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [engineStatus, setEngineStatus] = useState<'checking' | 'ready' | 'unavailable'>('checking')
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => window.localStorage.getItem('schemaforge-theme') === 'dark' ? 'dark' : 'light')
   const [busy, setBusy] = useState<'inspect' | 'generate' | null>(null)
   const [error, setError] = useState('')
   const [run, setRun] = useState<RunResult | null>(null)
@@ -78,6 +79,15 @@ function App() {
   useEffect(() => {
     api.health().then((result) => setEngineStatus(result.status === 'ready' ? 'ready' : 'unavailable')).catch(() => setEngineStatus('unavailable'))
   }, [])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    window.localStorage.setItem('schemaforge-theme', theme)
+  }, [theme])
+
+  useEffect(() => {
+    setRun(null)
+  }, [sql, dialect, format, validation, seed, defaultRows, realistic, tables, rules])
 
   const totalRows = useMemo(() => Object.values(tables).reduce((sum, table) => sum + table.rows, 0), [tables])
   const canGenerate = inspected && Object.keys(tables).length > 0 && !busy && engineStatus === 'ready'
@@ -196,6 +206,7 @@ function App() {
         <a className="brand" href="#top" aria-label="SchemaForge home"><span className="brand-mark" aria-hidden="true"><span /><span /><span /><span /></span><span>schemaforge</span></a>
         <nav className="header-nav" aria-label="Main navigation"><a className="nav-active" href="#workspace">Workspace</a><a href="#how-it-works">How it works</a><a href="https://github.com/Jaysurya85/schemaforge" target="_blank" rel="noreferrer"><Github size={15} /> GitHub</a></nav>
         <div className={`engine-pill ${engineStatus}`}><span className="status-dot" />{engineStatus === 'ready' ? 'Engine ready' : engineStatus === 'checking' ? 'Checking engine' : 'Engine offline'}</div>
+        <button className="theme-button" type="button" aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`} title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`} onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>{theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}</button>
       </div>
     </header>
 

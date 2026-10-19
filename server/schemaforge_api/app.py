@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .models import RunRequest, SchemaRequest
 from .runner import EngineError, binary_path, call_engine, download_path, generate, inspect_schema, read_run
@@ -69,3 +70,8 @@ def download(run_id: str) -> FileResponse:
     if artifact is None:
         raise HTTPException(status_code=404, detail="Run artifact not found")
     return FileResponse(artifact, filename=artifact.name)
+
+
+WEB_DIST = ROOT / "web" / "dist"
+if WEB_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
