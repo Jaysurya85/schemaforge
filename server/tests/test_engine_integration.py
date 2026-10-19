@@ -71,3 +71,19 @@ def test_real_engine_rejects_invalid_schema(monkeypatch: pytest.MonkeyPatch, tmp
     )
     assert response.status_code == 422
     assert response.json()["detail"]["log"]
+
+
+def test_capacity_failure_returns_only_the_cause(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    response = client.post(
+        "/api/runs",
+        json={
+            "sql": "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);",
+            "tables": {"customers": {"rows": 100, "columns": {"id": {"min": 2, "max": 10}}}},
+        },
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert len(detail["errors"]) == 1
+    assert detail["errors"][0].startswith("Cannot generate 100 rows for customers.id.")
+    assert "Welcome to Schemaforge" in detail["log"]

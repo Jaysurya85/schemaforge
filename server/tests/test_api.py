@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 from fastapi.testclient import TestClient
 
-from schemaforge_api.app import app
+from schemaforge_api.app import app, engine_http_error, engine_messages
 from schemaforge_api.runner import EngineError, ensure_schema_only, schema_columns
 
 
@@ -28,6 +28,24 @@ def test_column_choices_skip_constraints_and_nested_commas() -> None:
         'customer_id INTEGER, CONSTRAINT fk FOREIGN KEY (customer_id) REFERENCES customers(id));'
     )
     assert columns == [["order id", "total", "customer_id"]]
+
+
+def test_only_actionable_engine_errors_are_displayed() -> None:
+    log = (
+        "Welcome to Schemaforge\nValidation Result: Valid\n"
+        "Generation Validation Result: Invalid\nErrors:\n"
+        "- Cannot generate 100 rows for customers.id.\n"
+        "- Choose a wider range.\n"
+    )
+    error = EngineError("SchemaForge rejected this schema or configuration.", log)
+    assert engine_messages(error) == [
+        "Cannot generate 100 rows for customers.id.",
+        "Choose a wider range.",
+    ]
+    assert engine_http_error(error).detail["log"] == log
+    assert engine_messages(EngineError("Paste a CREATE TABLE statement.")) == [
+        "Paste a CREATE TABLE statement."
+    ]
 
 
 def test_unknown_request_settings_are_rejected() -> None:

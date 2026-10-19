@@ -21,8 +21,26 @@ app.add_middleware(
 )
 
 
+def engine_messages(error: EngineError) -> list[str]:
+    """Return the actionable diagnostics without the CLI's progress output."""
+    messages: list[str] = []
+    in_errors = False
+    for line in error.log.splitlines():
+        stripped = line.strip()
+        if stripped == "Errors:":
+            in_errors = True
+        elif in_errors and stripped.startswith("- "):
+            messages.append(stripped[2:].strip())
+        elif in_errors and stripped:
+            in_errors = False
+    return messages or [str(error)]
+
+
 def engine_http_error(error: EngineError) -> HTTPException:
-    return HTTPException(status_code=422, detail={"message": str(error), "log": error.log})
+    return HTTPException(
+        status_code=422,
+        detail={"message": str(error), "errors": engine_messages(error), "log": error.log},
+    )
 
 
 @app.get("/api/health")

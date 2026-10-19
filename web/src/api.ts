@@ -69,8 +69,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const detail = body.detail
+    if (typeof detail === 'object' && Array.isArray(detail?.errors) && detail.errors.length) {
+      throw new Error(detail.errors.join('\n'))
+    }
     if (typeof detail === 'object' && detail?.message) {
-      throw new Error(detail.log ? `${detail.message}\n${detail.log}` : detail.message)
+      throw new Error(detail.message)
     }
     if (Array.isArray(detail) && detail.length) {
       throw new Error(detail.map((issue) => `${issue.loc?.slice(1).join('.') || 'Input'}: ${issue.msg}`).join('\n'))
