@@ -16,3 +16,10 @@ examples/final_demo/postgres-copy-benchmark.yaml
 .DS_Store
 .vscode/
 .idea/
+server/.venv/
+server/.pytest_cache/
+server/**/__pycache__/
+server/*.egg-info/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
