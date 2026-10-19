@@ -1,0 +1,98 @@
+{
+  "contract_version": 1,
+  "cases": [
+    {
+      "id": "multi_table_supported",
+      "schema": "CREATE TABLE customers (id INTEGER PRIMARY KEY, age INTEGER, phone TEXT); CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(id), total DECIMAL(10, 2));",
+      "request": "Generate 1000 customers and 3000 orders. Customer ages should be 18 to 75, order totals 10 to 250, and 5% of phone numbers can be null.",
+      "expected_result": "ready",
+      "expected": {
+        "version": 1,
+        "table_rows": [{ "table": "customers", "rows": 1000 }, { "table": "orders", "rows": 3000 }],
+        "number_ranges": [{ "table": "customers", "column": "age", "min": 18, "max": 75 }, { "table": "orders", "column": "total", "min": 10, "max": 250 }],
+        "value_lists": [],
+        "null_rates": [{ "table": "customers", "column": "phone", "probability": 0.05 }],
+        "assumptions": [],
+        "unapplied": []
+      }
+    },
+    {
+      "id": "categorical_values",
+      "schema": "CREATE TABLE tickets (id INTEGER PRIMARY KEY, priority TEXT NOT NULL, score INTEGER);",
+      "request": "Make 50 tickets. Priority should be high or low, and score should be from 0 to 10.",
+      "expected_result": "ready",
+      "expected": {
+        "version": 1,
+        "table_rows": [{ "table": "tickets", "rows": 50 }],
+        "number_ranges": [{ "table": "tickets", "column": "score", "min": 0, "max": 10 }],
+        "value_lists": [{ "table": "tickets", "column": "priority", "values": ["high", "low"] }],
+        "null_rates": [],
+        "assumptions": [],
+        "unapplied": []
+      }
+    },
+    {
+      "id": "distribution_and_correlation_deferred",
+      "schema": "CREATE TABLE customers (id INTEGER PRIMARY KEY, tier TEXT); CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(id), total DECIMAL(10, 2));",
+      "request": "Generate 1000 customers. Exactly 10% should be premium, and premium customers should spend more than regular customers.",
+      "expected_result": "ready_with_unapplied",
+      "expected": {
+        "version": 1,
+        "table_rows": [{ "table": "customers", "rows": 1000 }],
+        "number_ranges": [],
+        "value_lists": [],
+        "null_rates": [],
+        "assumptions": [],
+        "unapplied": [
+          { "request": "Exactly 10% should be premium", "reason": "unsupported_distribution", "explanation": "Weighted category frequencies are not supported." },
+          { "request": "premium customers should spend more", "reason": "unsupported_relationship", "explanation": "Cross-table spending relationships are not supported." }
+        ]
+      }
+    },
+    {
+      "id": "missing_column",
+      "schema": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
+      "request": "Generate 100 users aged 18 to 75.",
+      "expected_result": "ready_with_unapplied",
+      "expected": {
+        "version": 1,
+        "table_rows": [{ "table": "users", "rows": 100 }],
+        "number_ranges": [],
+        "value_lists": [],
+        "null_rates": [],
+        "assumptions": [],
+        "unapplied": [{ "request": "aged 18 to 75", "reason": "unknown_schema_field", "explanation": "The users table has no age column." }]
+      }
+    },
+    {
+      "id": "ambiguous_size",
+      "schema": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
+      "request": "Make a medium-sized user dataset.",
+      "expected_result": "needs_clarification",
+      "expected": {
+        "version": 1,
+        "table_rows": [],
+        "number_ranges": [],
+        "value_lists": [],
+        "null_rates": [],
+        "assumptions": [],
+        "unapplied": [{ "request": "medium-sized", "reason": "ambiguous_request", "explanation": "A row count is needed to define the requested size." }]
+      }
+    },
+    {
+      "id": "unique_capacity_rejected",
+      "schema": "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);",
+      "request": "Generate 100 customers with ids between 1 and 5.",
+      "expected_result": "rejected_by_preflight",
+      "expected": {
+        "version": 1,
+        "table_rows": [{ "table": "customers", "rows": 100 }],
+        "number_ranges": [{ "table": "customers", "column": "id", "min": 1, "max": 5 }],
+        "value_lists": [],
+        "null_rates": [],
+        "assumptions": [],
+        "unapplied": []
+      }
+    }
+  ]
+}
