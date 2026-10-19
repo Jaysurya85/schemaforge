@@ -340,6 +340,9 @@ Generate data from the config:
 ```bash
 ./build/schemaforge generate --config schemaforge.yaml
 
+# Check schema, config, and generation feasibility without writing output
+./build/schemaforge validate --config schemaforge.yaml
+
 ```
 
 SchemaForge parses the schema, validates relationships and generation settings, builds a foreign-key dependency order, generates deterministic rows, streams the selected output format, and optionally validates the result.

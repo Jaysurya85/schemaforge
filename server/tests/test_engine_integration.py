@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from schemaforge_api.ai_plan import AIPlan, apply_ai_plan
 from schemaforge_api.app import app
 from schemaforge_api.models import RunRequest
 from schemaforge_api.runner import inspect_schema
+from schemaforge_api.runner import initial_config, render_generation_config
 
 
 pytestmark = pytest.mark.skipif(
@@ -18,6 +20,31 @@ pytestmark = pytest.mark.skipif(
     reason="Set SCHEMAFORGE_BINARY to a native CLI to run integration checks",
 )
 client = TestClient(app)
+
+
+def test_validate_command_checks_capacity_without_writing_output(tmp_path: Path) -> None:
+    config = initial_config(
+        RunRequest(sql="CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);"), tmp_path
+    )
+    output_path = tmp_path / "unused.sql"
+    config["output"] = {"format": "sql", "file": str(output_path)}
+    config["tables"]["customers"]["rows"] = 2
+    config_path = tmp_path / "schemaforge.yaml"
+    config_path.write_text(render_generation_config(config), encoding="utf-8")
+    binary = os.environ["SCHEMAFORGE_BINARY"]
+
+    valid = subprocess.run([binary, "validate", "--config", str(config_path)], capture_output=True, text=True)
+    assert valid.returncode == 0, valid.stdout + valid.stderr
+    assert "Preflight validation passed" in valid.stdout
+    assert not output_path.exists()
+
+    config["tables"]["customers"]["rows"] = 100
+    config["tables"]["customers"]["columns"] = {"id": {"min": 2, "max": 10}}
+    config_path.write_text(render_generation_config(config), encoding="utf-8")
+    invalid = subprocess.run([binary, "validate", "--config", str(config_path)], capture_output=True, text=True)
+    assert invalid.returncode != 0
+    assert "Cannot generate 100 rows for customers.id" in invalid.stdout
+    assert not output_path.exists()
 
 
 def test_inspection_returns_only_real_columns() -> None:
