@@ -16,6 +16,17 @@ pytestmark = pytest.mark.skipif(
 client = TestClient(app)
 
 
+def test_inspection_returns_only_real_columns() -> None:
+    response = client.post(
+        "/api/schemas/inspect",
+        json={"sql": "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL);"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["tables"] == [
+        {"name": "customers", "rows": 10, "columns": ["id", "name", "email"]}
+    ]
+
+
 @pytest.mark.parametrize(
     ("output_format", "dialect", "artifact_type"),
     [("sql", "sqlite", "application/x-sql"),

@@ -49,6 +49,49 @@ def ensure_schema_only(sql: str) -> None:
             raise EngineError("Only CREATE TABLE statements are accepted in the schema editor.")
 
 
+def schema_columns(sql: str) -> list[list[str]]:
+    """List column identifiers in each table declaration after CLI validation."""
+    constraint_starts = {"CONSTRAINT", "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "KEY", "INDEX"}
+    tables: list[list[str]] = []
+    for statement in sqlparse.parse(sql):
+        columns: list[str] = []
+        depth = 0
+        first_token = None
+
+        def add_column() -> None:
+            if first_token is None:
+                return
+            value = first_token.value
+            quoted = value.startswith(('"', '`', '['))
+            if not quoted and value.upper().split()[0] in constraint_starts:
+                return
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1].replace('""', '"')
+            elif value.startswith('`') and value.endswith('`'):
+                value = value[1:-1].replace('``', '`')
+            elif value.startswith('[') and value.endswith(']'):
+                value = value[1:-1]
+            columns.append(value)
+
+        for token in statement.flatten():
+            if token.is_whitespace or token.ttype in sqlparse.tokens.Comment:
+                continue
+            if token.value == "(":
+                depth += 1
+            elif token.value == ")":
+                if depth == 1:
+                    add_column()
+                    break
+                depth -= 1
+            elif depth == 1 and token.value == ",":
+                add_column()
+                first_token = None
+            elif depth == 1 and first_token is None:
+                first_token = token
+        tables.append(columns)
+    return tables
+
+
 def call_engine(arguments: list[str]) -> str:
     binary = binary_path()
     if not binary.is_file():
@@ -94,10 +137,13 @@ def initial_config(request: SchemaRequest, directory: Path) -> dict[str, Any]:
 def inspect_schema(request: SchemaRequest) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="schemaforge-inspect-") as temporary:
         config = initial_config(request, Path(temporary))
+        columns = schema_columns(request.sql)
+        if len(columns) != len(config["tables"]):
+            raise EngineError("Could not match the parsed tables to their columns.")
         return {
             "tables": [
-                {"name": name, "rows": settings.get("rows", request.default_rows)}
-                for name, settings in config["tables"].items()
+                {"name": name, "rows": settings.get("rows", request.default_rows), "columns": columns[index]}
+                for index, (name, settings) in enumerate(config["tables"].items())
             ],
             "dialect": request.dialect,
         }

@@ -6,7 +6,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from schemaforge_api.app import app
-from schemaforge_api.runner import EngineError, ensure_schema_only
+from schemaforge_api.runner import EngineError, ensure_schema_only, schema_columns
 
 
 client = TestClient(app)
@@ -20,6 +20,14 @@ def test_schema_editor_accepts_tables_and_rejects_other_statements() -> None:
         assert "Only CREATE TABLE" in str(error)
     else:
         raise AssertionError("A non-table SQL statement was accepted")
+
+
+def test_column_choices_skip_constraints_and_nested_commas() -> None:
+    columns = schema_columns(
+        'CREATE TABLE orders ("order id" INTEGER PRIMARY KEY, total DECIMAL(10, 2), '
+        'customer_id INTEGER, CONSTRAINT fk FOREIGN KEY (customer_id) REFERENCES customers(id));'
+    )
+    assert columns == [["order id", "total", "customer_id"]]
 
 
 def test_unknown_request_settings_are_rejected() -> None:

@@ -22,7 +22,7 @@ export type SchemaInput = {
 }
 
 export type InspectResult = {
-  tables: Array<{ name: string; rows: number }>
+  tables: Array<{ name: string; rows: number; columns: string[] }>
   dialect: Dialect
 }
 

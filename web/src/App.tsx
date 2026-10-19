@@ -65,6 +65,7 @@ function App() {
   const [defaultRows, setDefaultRows] = useState(100)
   const [realistic, setRealistic] = useState(true)
   const [tables, setTables] = useState<Record<string, TableSettings>>({})
+  const [schemaColumns, setSchemaColumns] = useState<Record<string, string[]>>({})
   const [inspected, setInspected] = useState(false)
   const [rules, setRules] = useState<Rule[]>([])
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>({ table: '', column: '', type: 'values', value: '' })
@@ -96,6 +97,7 @@ function App() {
     setSql(value)
     setInspected(false)
     setTables({})
+    setSchemaColumns({})
     setRules([])
     setRun(null)
     setError('')
@@ -118,9 +120,10 @@ function App() {
     try {
       const result = await api.inspect({ sql, dialect, seed, default_rows: defaultRows })
       setTables(Object.fromEntries(result.tables.map((table) => [table.name, { rows: table.rows, columns: {} }])))
+      setSchemaColumns(Object.fromEntries(result.tables.map((table) => [table.name, table.columns])))
       setRules([])
       setInspected(true)
-      setRuleDraft((draft) => ({ ...draft, table: result.tables[0]?.name ?? '' }))
+      setRuleDraft((draft) => ({ ...draft, table: result.tables[0]?.name ?? '', column: result.tables[0]?.columns[0] ?? '' }))
     } catch (cause) {
       setInspected(false)
       setError(cause instanceof Error ? cause.message : 'Could not inspect the schema.')
@@ -157,8 +160,8 @@ function App() {
 
   function addRule() {
     const column = ruleDraft.column.trim()
-    if (!ruleDraft.table || !column) {
-      setError('Choose a table and enter a column name before adding a rule.')
+    if (!ruleDraft.table || !schemaColumns[ruleDraft.table]?.includes(column)) {
+      setError('Choose a column from the inspected schema before adding a rule.')
       return
     }
     const candidate = { ...ruleDraft, column, id: Date.now() }
@@ -168,7 +171,7 @@ function App() {
         throw new Error('A rule of this type already exists for that column.')
       }
       setRules((current) => [...current, candidate])
-      setRuleDraft((draft) => ({ ...draft, column: '', value: '' }))
+      setRuleDraft((draft) => ({ ...draft, value: '' }))
       setError('')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not add the rule.')
@@ -234,7 +237,7 @@ function App() {
               <div className="field-grid"><div className="field"><label htmlFor="default-rows">Rows per table</label><input id="default-rows" type="number" min="0" max="2000000" value={defaultRows} onChange={(event) => setDefaultRows(Number(event.target.value))} disabled={inspected} /><small>{inspected ? 'Edit each table below' : 'Applied when inspecting'}</small></div><div className="field"><label htmlFor="seed">Random seed</label><input id="seed" type="number" min="0" max="4294967295" value={seed} onChange={(event) => setSeed(Number(event.target.value))} /><small>Repeatable results</small></div></div>
               {inspected && <div className="table-config"><div className="field-label">TABLES <span>{formatNumber(totalRows)} total rows</span></div>{Object.entries(tables).map(([name, settings]) => <div className="table-row" key={name}><span className="table-name"><Table2 size={16} />{name}</span><div className="row-input"><input aria-label={`Rows for ${name}`} type="number" min="0" max="2000000" value={settings.rows} onChange={(event) => setTables((current) => ({ ...current, [name]: { ...current[name], rows: Number(event.target.value) } }))} /><span>rows</span></div></div>)}</div>}
               <div className="toggle-row"><div><strong>Realistic values</strong><span>Generate more natural names, dates, and text</span></div><button className={`toggle ${realistic ? 'on' : ''}`} type="button" role="switch" aria-checked={realistic} aria-label="Realistic values" onClick={() => setRealistic(!realistic)}><span /></button></div>
-              {inspected && <div className="advanced"><button className="advanced-trigger" type="button" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen(!advancedOpen)}><span><Settings2 size={16} /> Column rules <span className="rule-count">{rules.length}</span></span><ChevronDown size={16} className={advancedOpen ? 'chevron-open' : ''} /></button>{advancedOpen && <div className="advanced-body"><p>Override individual columns with a value list, numeric range, or null rate.</p>{rules.map((rule) => <div className="saved-rule" key={rule.id}><span><strong>{rule.table}.{rule.column}</strong> · {rule.type === 'nulls' ? `${rule.value}% nulls` : rule.type === 'range' ? `range ${rule.value}` : rule.value}</span><button type="button" aria-label={`Remove rule for ${rule.table}.${rule.column}`} onClick={() => setRules((current) => current.filter((item) => item.id !== rule.id))}><Trash2 size={14} /></button></div>)}<div className="rule-fields"><select aria-label="Rule table" value={ruleDraft.table} onChange={(event) => setRuleDraft({ ...ruleDraft, table: event.target.value })}>{Object.keys(tables).map((name) => <option key={name}>{name}</option>)}</select><input aria-label="Column name" placeholder="Column name" value={ruleDraft.column} onChange={(event) => setRuleDraft({ ...ruleDraft, column: event.target.value })} /><select aria-label="Rule type" value={ruleDraft.type} onChange={(event) => setRuleDraft({ ...ruleDraft, type: event.target.value as RuleDraft['type'], value: '' })}><option value="values">Value list</option><option value="range">Number range</option><option value="nulls">Null rate</option></select><input aria-label="Rule value" placeholder={ruleDraft.type === 'range' ? 'min, max' : ruleDraft.type === 'nulls' ? 'Percent (0–100)' : 'value 1, value 2'} value={ruleDraft.value} onChange={(event) => setRuleDraft({ ...ruleDraft, value: event.target.value })} /></div><button className="small-button" type="button" onClick={addRule}><Plus size={14} /> Add rule</button></div>}</div>}
+              {inspected && <div className="advanced"><button className="advanced-trigger" type="button" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen(!advancedOpen)}><span><Settings2 size={16} /> Column rules <span className="rule-count">{rules.length}</span></span><ChevronDown size={16} className={advancedOpen ? 'chevron-open' : ''} /></button>{advancedOpen && <div className="advanced-body"><p>Override individual columns with a value list, numeric range, or null rate.</p>{rules.map((rule) => <div className="saved-rule" key={rule.id}><span><strong>{rule.table}.{rule.column}</strong> · {rule.type === 'nulls' ? `${rule.value}% nulls` : rule.type === 'range' ? `range ${rule.value}` : rule.value}</span><button type="button" aria-label={`Remove rule for ${rule.table}.${rule.column}`} onClick={() => setRules((current) => current.filter((item) => item.id !== rule.id))}><Trash2 size={14} /></button></div>)}<div className="rule-fields"><select aria-label="Rule table" value={ruleDraft.table} onChange={(event) => setRuleDraft({ ...ruleDraft, table: event.target.value, column: schemaColumns[event.target.value]?.[0] ?? '' })}>{Object.keys(tables).map((name) => <option key={name}>{name}</option>)}</select><select aria-label="Rule column" value={ruleDraft.column} onChange={(event) => setRuleDraft({ ...ruleDraft, column: event.target.value })}>{(schemaColumns[ruleDraft.table] ?? []).map((name) => <option key={name} value={name}>{name}</option>)}</select><select aria-label="Rule type" value={ruleDraft.type} onChange={(event) => setRuleDraft({ ...ruleDraft, type: event.target.value as RuleDraft['type'], value: '' })}><option value="values">Value list</option><option value="range">Number range</option><option value="nulls">Null rate</option></select><input aria-label="Rule value" placeholder={ruleDraft.type === 'range' ? 'min, max' : ruleDraft.type === 'nulls' ? 'Percent (0–100)' : 'value 1, value 2'} value={ruleDraft.value} onChange={(event) => setRuleDraft({ ...ruleDraft, value: event.target.value })} /></div><button className="small-button" type="button" onClick={addRule}><Plus size={14} /> Add rule</button></div>}</div>}
             </div>
 
             <div className="panel output-panel"><div className="panel-heading"><div className="step-number">03</div><div><h3>Choose your output</h3><p>Pick a format and validation method.</p></div></div><div className="format-options" role="group" aria-label="Output format"><button className={format === 'sql' ? 'active' : ''} onClick={() => changeFormat('sql')} type="button"><FileCode2 size={17} /><strong>SQL</strong><span>Insert statements</span></button><button className={format === 'csv' ? 'active' : ''} onClick={() => changeFormat('csv')} type="button"><Table2 size={17} /><strong>CSV</strong><span>One file per table</span></button><button className={format === 'postgres_copy' ? 'active' : ''} onClick={() => changeFormat('postgres_copy')} type="button"><Database size={17} /><strong>PG COPY</strong><span>Bulk import script</span></button></div><div className="validation-row"><label htmlFor="validation">Validate with</label><select id="validation" value={validation} onChange={(event) => setValidation(event.target.value as Validation)}><option value="none">No validation</option>{format === 'sql' && dialect === 'sqlite' && <option value="sqlite">SQLite</option>}{dialect === 'postgres' && format !== 'csv' && <option value="postgres">PostgreSQL</option>}</select></div></div>
