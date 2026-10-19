@@ -1,5 +1,6 @@
 """HTTP routes for local SchemaForge runs."""
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -9,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .ai_plan import PlanApplicationError, apply_ai_plan
-from .model_provider import OpenAIProvider, PlanProvider, ProviderError
+from .model_provider import NaviGatorProvider, OpenAIProvider, PlanProvider, ProviderError
 from .models import RunRequest, SchemaRequest
 from .runner import (EngineError, binary_path, call_engine, download_path, generate,
                      generate_prepared, inspect_schema, prepare_config, read_run)
@@ -54,6 +55,11 @@ class PlanningRequest(BaseModel):
 
 
 def planning_provider() -> PlanProvider:
+    provider = os.environ.get("SCHEMAFORGE_AI_PROVIDER", "navigator" if os.environ.get("NAVIGATOR_TOOLKIT_API_KEY") else "openai").lower()
+    if provider == "navigator":
+        return NaviGatorProvider()
+    if provider != "openai":
+        raise ProviderError("SCHEMAFORGE_AI_PROVIDER must be 'navigator' or 'openai'.")
     return OpenAIProvider()
 
 

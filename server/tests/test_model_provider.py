@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from schemaforge_api.model_provider import OpenAIProvider, ProviderError
+from schemaforge_api.app import planning_provider
+from schemaforge_api.model_provider import NaviGatorProvider, OpenAIProvider, ProviderError
 
 
 EMPTY_PLAN = {"version": 1, "table_rows": [], "number_ranges": [], "value_lists": [],
@@ -48,3 +49,42 @@ def test_openai_adapter_needs_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ProviderError, match="OPENAI_API_KEY"):
         OpenAIProvider().propose(sql="x", request="x", inspection={}, current={})
+
+
+def test_navigator_adapter_sends_schema_and_validates_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["auth"] = request.get_header("Authorization")
+        captured["payload"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return FakeResponse(json.dumps({"choices": [{"finish_reason": "stop", "message": {
+            "content": json.dumps(EMPTY_PLAN)}}]}).encode())
+
+    monkeypatch.setattr("schemaforge_api.model_provider.urllib.request.urlopen", fake_urlopen)
+    plan = NaviGatorProvider(api_key="test-only").propose(
+        sql="CREATE TABLE t (id INT);", request="two rows", inspection={"tables": []}, current={})
+    assert plan.version == 1
+    assert captured["url"] == "https://api.ai.it.ufl.edu/v1/chat/completions"
+    assert captured["auth"] == "Bearer test-only"
+    assert captured["payload"]["model"] == "gpt-oss-20b"
+    assert captured["payload"]["response_format"]["json_schema"]["strict"] is True
+    assert "CREATE TABLE t" in captured["payload"]["messages"][1]["content"]
+    assert captured["timeout"] == 45
+
+
+def test_navigator_adapter_rejects_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("schemaforge_api.model_provider.urllib.request.urlopen", lambda *_args, **_kwargs:
+                        FakeResponse(json.dumps({"choices": [{"finish_reason": "stop", "message": {
+                            "content": '{"version":1}'}}]}).encode()))
+    with pytest.raises(ProviderError, match="failed SchemaForge validation"):
+        NaviGatorProvider(api_key="test-only").propose(sql="x", request="x", inspection={}, current={})
+
+
+def test_provider_selection_prefers_configured_navigator_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SCHEMAFORGE_AI_PROVIDER", raising=False)
+    monkeypatch.setenv("NAVIGATOR_TOOLKIT_API_KEY", "test-only")
+    assert isinstance(planning_provider(), NaviGatorProvider)
+    monkeypatch.setenv("SCHEMAFORGE_AI_PROVIDER", "openai")
+    assert isinstance(planning_provider(), OpenAIProvider)

@@ -266,9 +266,13 @@ results. It is designed for a laptop demo and binds to loopback by default.
 After inspecting a schema, the optional AI planner can turn a testing goal into
 reviewable controls and YAML. It only proposes settings the current engine can
 validate; unsupported distribution requests are shown as unapplied. Generation
-still runs through the local C++ engine. AI planning requires a server-side
-`OPENAI_API_KEY` and sends the schema, current settings, and testing goal to
-OpenAI. Manual generation works without a key.
+still runs through the local C++ engine. AI planning sends the schema, current
+settings, and testing goal to the configured provider. For the UF-hosted
+NaviGator model, set `NAVIGATOR_TOOLKIT_API_KEY` on the server before starting
+it; `gpt-oss-20b` is the default. The existing `OPENAI_API_KEY` provider is
+also supported. Keep either key out of the browser and Git. Manual generation
+works without a key. See [server/README.md](server/README.md) for provider
+selection and setup details.
 
 After building the CLI, start the API from the repository root:
 

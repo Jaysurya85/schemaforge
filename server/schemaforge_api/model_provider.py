@@ -1,4 +1,4 @@
-"""Replaceable AI planner provider. No model call happens without an API key."""
+"""Replaceable AI planner providers. No model call happens without an API key."""
 
 import json
 import os
@@ -45,6 +45,23 @@ PLAN_SCHEMA = _object({
             "ambiguous_request", "conflicting_request"]},
         "explanation": _STRING})},
 })
+SYSTEM_PROMPT = (
+    "You plan constraint-valid test data for SchemaForge. Return JSON matching the schema. "
+    "Use only inspected table and column names, and only supported table rows, numeric ranges, "
+    "value lists, and null rates. Do not claim distributions or relationship patterns are "
+    "implemented; put those requests in unapplied. State assumptions. If a request is ambiguous "
+    "or impossible, put it in unapplied rather than inventing a rule. Never emit SQL or YAML."
+)
+
+
+def planning_messages(sql: str, request: str, inspection: dict[str, Any],
+                      current: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps({
+            "schema": sql, "inspection": inspection, "current_settings": current,
+            "testing_request": request}, ensure_ascii=False)},
+    ]
 
 
 class OpenAIProvider:
@@ -56,23 +73,11 @@ class OpenAIProvider:
                 current: dict[str, Any]) -> AIPlan:
         if not self.api_key:
             raise ProviderError("Set OPENAI_API_KEY on the server to enable AI planning.")
-        system = (
-            "You plan constraint-valid test data for SchemaForge. Return JSON matching the schema. "
-            "Use only inspected table and column names, and only supported table rows, numeric ranges, "
-            "value lists, and null rates. Do not claim distributions or relationship patterns are "
-            "implemented; put those requests in unapplied. State assumptions. If a request is ambiguous "
-            "or impossible, put it in unapplied rather than inventing a rule. Never emit SQL or YAML."
-        )
         payload = {
             "model": self.model,
             "store": False,
             "max_output_tokens": 3000,
-            "input": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": json.dumps({
-                    "schema": sql, "inspection": inspection, "current_settings": current,
-                    "testing_request": request}, ensure_ascii=False)},
-            ],
+            "input": planning_messages(sql, request, inspection, current),
             "text": {"format": {"type": "json_schema", "name": "schemaforge_plan",
                                 "strict": True, "schema": PLAN_SCHEMA}},
         }
@@ -102,3 +107,48 @@ class OpenAIProvider:
             return AIPlan.model_validate_json(texts[0])
         except ValidationError as error:
             raise ProviderError("OpenAI returned a plan that failed SchemaForge validation.") from error
+
+
+class NaviGatorProvider:
+    """Use a UF personal key with a UF-hosted model for local planning."""
+
+    def __init__(self, *, api_key: str | None = None, model: str | None = None) -> None:
+        self.api_key = api_key or os.environ.get("NAVIGATOR_TOOLKIT_API_KEY")
+        self.model = model or os.environ.get("SCHEMAFORGE_NAVIGATOR_MODEL", "gpt-oss-20b")
+
+    def propose(self, *, sql: str, request: str, inspection: dict[str, Any],
+                current: dict[str, Any]) -> AIPlan:
+        if not self.api_key:
+            raise ProviderError("Set NAVIGATOR_TOOLKIT_API_KEY on the server to enable NaviGator planning.")
+        payload = {
+            "model": self.model,
+            "messages": planning_messages(sql, request, inspection, current),
+            "response_format": {"type": "json_schema", "json_schema": {
+                "name": "schemaforge_plan", "strict": True, "schema": PLAN_SCHEMA}},
+        }
+        http_request = urllib.request.Request(
+            "https://api.ai.it.ufl.edu/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(http_request, timeout=45) as response:
+                data = json.load(response)
+        except urllib.error.HTTPError as error:
+            raise ProviderError(f"NaviGator planning request failed (HTTP {error.code}).") from error
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+            raise ProviderError("NaviGator planning request could not be completed.") from error
+        choices = data.get("choices", [])
+        if not choices or choices[0].get("finish_reason") not in ("stop", None):
+            raise ProviderError("NaviGator did not complete the planning response.")
+        message = choices[0].get("message", {})
+        if message.get("refusal"):
+            raise ProviderError("NaviGator declined this planning request.")
+        content = message.get("content")
+        if not isinstance(content, str) or not content:
+            raise ProviderError("NaviGator returned no usable plan.")
+        try:
+            return AIPlan.model_validate_json(content)
+        except ValidationError as error:
+            raise ProviderError("NaviGator returned a plan that failed SchemaForge validation.") from error

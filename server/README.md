@@ -34,11 +34,18 @@ only when the user chooses **Apply plan to controls**. Generating an accepted
 draft uses that saved YAML. Editing a control makes the browser discard its
 acceptance of that draft.
 
-AI planning sends the SQL schema, current settings, and testing goal to OpenAI.
-The API key belongs on the server as `OPENAI_API_KEY`; never put it in the
-browser or a source file. `SCHEMAFORGE_OPENAI_MODEL` can override the default
-`gpt-4o-mini` model. Without a key, manual generation and config preview still
-work, while AI planning returns a clear setup error. Model output is treated
+AI planning sends the SQL schema, current settings, and testing goal to the
+configured provider. To use UF NaviGator AI Toolkit, create a personal key with
+access to the UF-hosted `gpt-oss-20b` model and set `NAVIGATOR_TOOLKIT_API_KEY`
+in the server's environment before launching it. The server selects NaviGator
+when that key exists. `SCHEMAFORGE_NAVIGATOR_MODEL` overrides the model. The
+existing OpenAI provider remains available through `OPENAI_API_KEY`; select it
+explicitly with `SCHEMAFORGE_AI_PROVIDER=openai` if both keys are present.
+`SCHEMAFORGE_OPENAI_MODEL` overrides its default `gpt-4o-mini` model. You can
+also explicitly select NaviGator with `SCHEMAFORGE_AI_PROVIDER=navigator`.
+Keep API keys out of the browser, source files, Git, and logs. Without a key,
+manual generation and config preview still work, while AI planning returns a
+clear setup error. Model output is treated
 as a proposal: a strict response schema, Pydantic checks, schema-name and type
 checks, and the C++ validation-only preflight all run before a draft is offered.
 The provider adapter is replaceable for offline tests. The current engine can
