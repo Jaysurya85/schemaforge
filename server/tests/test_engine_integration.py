@@ -57,6 +57,23 @@ def test_ai_endpoint_returns_review_draft_without_generation(monkeypatch: pytest
     assert data["draft"]["request"]["tables"]["customers"]["rows"] == 4
     assert "gold" in data["draft"]["yaml"]
     assert not (tmp_path / "runs" / data["draft"]["id"] / "output.sql").exists()
+    generated = client.post(f"/api/configs/{data['draft']['id']}/generate")
+    assert generated.status_code == 200, generated.text
+    assert generated.json()["metrics"]["generation"]["total_rows"] == 4
+    assert (tmp_path / "runs" / data["draft"]["id"] / "schemaforge.yaml").read_text() == data["draft"]["yaml"]
+
+
+def test_ambiguous_ai_request_is_visible_but_does_not_change_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    plan = base_plan(unapplied=[{"request": "make some customers unusual", "reason": "ambiguous_request",
+                                 "explanation": "No specific constraint was provided."}])
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(plan))
+    response = client.post("/api/ai/plan", json=planning_body())
+    assert response.status_code == 200, response.text
+    assert response.json()["plan"]["unapplied"][0]["reason"] == "ambiguous_request"
+    assert response.json()["draft"]["request"]["tables"]["customers"]["rows"] == 10
 
 
 @pytest.mark.parametrize("plan,error", [

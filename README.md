@@ -263,6 +263,12 @@ server runs the CLI for each request and exposes the same API to the browser or
 to `curl`. The website supports SQL schema inspection, row and column controls,
 SQL/CSV/PostgreSQL COPY output, preview, download, and the engine's validation
 results. It is designed for a laptop demo and binds to loopback by default.
+After inspecting a schema, the optional AI planner can turn a testing goal into
+reviewable controls and YAML. It only proposes settings the current engine can
+validate; unsupported distribution requests are shown as unapplied. Generation
+still runs through the local C++ engine. AI planning requires a server-side
+`OPENAI_API_KEY` and sends the schema, current settings, and testing goal to
+OpenAI. Manual generation works without a key.
 
 After building the CLI, start the API from the repository root:
 

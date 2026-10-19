@@ -12,6 +12,9 @@ web app and `curl` both use this API.
 | `GET` | `/api/examples/ecommerce` | Load the bundled demonstration schema. |
 | `POST` | `/api/schemas/inspect` | Ask the CLI to validate SQL and create a base configuration. |
 | `POST` | `/api/runs` | Generate an artifact and return its run ID, preview, and metrics. |
+| `POST` | `/api/configs/preview` | Validate a run request and return the exact YAML draft. |
+| `POST` | `/api/configs/{draft_id}/generate` | Generate from the unchanged, reviewed YAML draft. |
+| `POST` | `/api/ai/plan` | Propose settings from a testing goal, preflight them, and return a review draft. |
 | `GET` | `/api/runs/{run_id}` | Read a completed run's metadata. |
 | `GET` | `/api/runs/{run_id}/download` | Download the generated artifact. |
 
@@ -20,6 +23,34 @@ web app and `curl` both use this API.
 `min`, `max`, `values`, and `null_probability`. Unsupported request properties
 are rejected. The server owns all filesystem paths and never accepts output
 paths from a request.
+
+`POST /api/ai/plan` accepts `{"request": <run request>, "testing_goal": "..."}`.
+It returns a `plan` with proposed row counts and column rules, assumptions,
+and `unapplied` requests, plus a `draft` containing an ID, the applied request,
+and its exact YAML. The server checks the schema, names, types, and generation
+capacity before returning it. The endpoint does not generate data. The browser
+shows the proposed settings and YAML, then applies the settings to the controls
+only when the user chooses **Apply plan to controls**. Generating an accepted
+draft uses that saved YAML. Editing a control makes the browser discard its
+acceptance of that draft.
+
+AI planning sends the SQL schema, current settings, and testing goal to OpenAI.
+The API key belongs on the server as `OPENAI_API_KEY`; never put it in the
+browser or a source file. `SCHEMAFORGE_OPENAI_MODEL` can override the default
+`gpt-4o-mini` model. Without a key, manual generation and config preview still
+work, while AI planning returns a clear setup error. Model output is treated
+as a proposal: a strict response schema, Pydantic checks, schema-name and type
+checks, and the C++ validation-only preflight all run before a draft is offered.
+The provider adapter is replaceable for offline tests. The current engine can
+apply constraints, not probability distributions; those requests appear in
+`unapplied` instead of being represented as generated behavior.
+
+For a manual preview without AI, post the same run request to
+`/api/configs/preview`, inspect its `yaml`, then post to
+`/api/configs/{draft_id}/generate`. Drafts and completed runs live under
+`SCHEMAFORGE_RUN_DIR` (the system temporary directory by default). They are
+retained there until you remove them. A draft can be generated once. The API
+listens on loopback in the commands below; it has no authentication layer.
 
 The initial implementation runs each job to completion before responding.
 The run ID and resource URLs allow later work to add asynchronous execution
