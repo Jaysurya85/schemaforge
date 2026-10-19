@@ -33,7 +33,7 @@ def engine_messages(error: EngineError) -> list[str]:
             messages.append(stripped[2:].strip())
         elif in_errors and stripped:
             in_errors = False
-    return messages or [str(error)]
+    return list(dict.fromkeys(messages)) or [str(error)]
 
 
 def engine_http_error(error: EngineError) -> HTTPException:

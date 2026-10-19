@@ -49,17 +49,18 @@ def ensure_schema_only(sql: str) -> None:
             raise EngineError("Only CREATE TABLE statements are accepted in the schema editor.")
 
 
-def schema_columns(sql: str) -> list[list[str]]:
-    """List column identifiers in each table declaration after CLI validation."""
+def schema_column_definitions(sql: str) -> list[list[tuple[str, str]]]:
+    """List column names and SQL types after the CLI validates the schema."""
     constraint_starts = {"CONSTRAINT", "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "KEY", "INDEX"}
-    tables: list[list[str]] = []
+    tables: list[list[tuple[str, str]]] = []
     for statement in sqlparse.parse(sql):
-        columns: list[str] = []
+        columns: list[tuple[str, str]] = []
         depth = 0
         first_token = None
+        type_token = None
 
         def add_column() -> None:
-            if first_token is None:
+            if first_token is None or type_token is None:
                 return
             value = first_token.value
             quoted = value.startswith(('"', '`', '['))
@@ -71,7 +72,7 @@ def schema_columns(sql: str) -> list[list[str]]:
                 value = value[1:-1].replace('``', '`')
             elif value.startswith('[') and value.endswith(']'):
                 value = value[1:-1]
-            columns.append(value)
+            columns.append((value, type_token.value.upper()))
 
         for token in statement.flatten():
             if token.is_whitespace or token.ttype in sqlparse.tokens.Comment:
@@ -86,10 +87,18 @@ def schema_columns(sql: str) -> list[list[str]]:
             elif depth == 1 and token.value == ",":
                 add_column()
                 first_token = None
+                type_token = None
             elif depth == 1 and first_token is None:
                 first_token = token
+            elif depth == 1 and type_token is None:
+                type_token = token
         tables.append(columns)
     return tables
+
+
+def schema_columns(sql: str) -> list[list[str]]:
+    """List column identifiers in each table declaration after CLI validation."""
+    return [[name for name, _ in table] for table in schema_column_definitions(sql)]
 
 
 def call_engine(arguments: list[str]) -> str:
@@ -137,12 +146,17 @@ def initial_config(request: SchemaRequest, directory: Path) -> dict[str, Any]:
 def inspect_schema(request: SchemaRequest) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="schemaforge-inspect-") as temporary:
         config = initial_config(request, Path(temporary))
-        columns = schema_columns(request.sql)
-        if len(columns) != len(config["tables"]):
+        definitions = schema_column_definitions(request.sql)
+        if len(definitions) != len(config["tables"]):
             raise EngineError("Could not match the parsed tables to their columns.")
         return {
             "tables": [
-                {"name": name, "rows": settings.get("rows", request.default_rows), "columns": columns[index]}
+                {
+                    "name": name,
+                    "rows": settings.get("rows", request.default_rows),
+                    "columns": [column for column, _ in definitions[index]],
+                    "column_types": dict(definitions[index]),
+                }
                 for index, (name, settings) in enumerate(config["tables"].items())
             ],
             "dialect": request.dialect,

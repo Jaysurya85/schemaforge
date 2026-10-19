@@ -28,11 +28,20 @@ function formatNumber(value: number | undefined, digits = 0) {
     : '—'
 }
 
-function parseRule(rule: Rule): ColumnSettings {
+const integerTypes = new Set(['INT', 'INTEGER', 'SMALLINT', 'BIGINT', 'LONG'])
+const decimalTypes = new Set(['DECIMAL', 'FLOAT', 'DOUBLE', 'REAL'])
+
+function parseRule(rule: Rule, columnType: string): ColumnSettings {
+  const label = `${rule.table}.${rule.column}`
   if (rule.type === 'range') {
-    const [min, max] = rule.value.split(',').map((part) => Number(part.trim()))
-    if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) {
-      throw new Error(`Enter a valid min, max range for ${rule.table}.${rule.column}.`)
+    if (!integerTypes.has(columnType) && !decimalTypes.has(columnType)) {
+      throw new Error(`A number range requires a numeric column. ${label} is ${columnType}.`)
+    }
+    const parts = rule.value.split(',').map((part) => part.trim())
+    const [min, max] = parts.map(Number)
+    if (parts.length !== 2 || parts.some((part) => !part) || !Number.isFinite(min) || !Number.isFinite(max) || min > max ||
+      (integerTypes.has(columnType) && (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)))) {
+      throw new Error(`Enter a valid min, max range for ${label}.`)
     }
     return { min, max }
   }
@@ -44,7 +53,27 @@ function parseRule(rule: Rule): ColumnSettings {
     return { null_probability: probability / 100 }
   }
   const values = rule.value.split(',').map((value) => value.trim()).filter(Boolean)
-  if (!values.length) throw new Error(`Add at least one value for ${rule.table}.${rule.column}.`)
+  if (!values.length) throw new Error(`Add at least one value for ${label}.`)
+  if (integerTypes.has(columnType)) {
+    const numbers = values.map(Number)
+    if (values.some((value) => !/^[+-]?\d+$/.test(value)) || numbers.some((value) => !Number.isSafeInteger(value))) {
+      throw new Error(`Enter whole numbers for ${label}.`)
+    }
+    return { values: numbers }
+  }
+  if (decimalTypes.has(columnType)) {
+    const numbers = values.map(Number)
+    if (numbers.some((value) => !Number.isFinite(value))) {
+      throw new Error(`Enter numbers for ${label}.`)
+    }
+    return { values: numbers }
+  }
+  if (columnType === 'BOOLEAN') {
+    if (values.some((value) => !['true', 'false'].includes(value.toLowerCase()))) {
+      throw new Error(`Enter true or false for ${label}.`)
+    }
+    return { values: values.map((value) => value.toLowerCase() === 'true') }
+  }
   return { values }
 }
 
@@ -66,6 +95,7 @@ function App() {
   const [realistic, setRealistic] = useState(true)
   const [tables, setTables] = useState<Record<string, TableSettings>>({})
   const [schemaColumns, setSchemaColumns] = useState<Record<string, string[]>>({})
+  const [schemaColumnTypes, setSchemaColumnTypes] = useState<Record<string, Record<string, string>>>({})
   const [inspected, setInspected] = useState(false)
   const [rules, setRules] = useState<Rule[]>([])
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>({ table: '', column: '', type: 'values', value: '' })
@@ -98,6 +128,7 @@ function App() {
     setInspected(false)
     setTables({})
     setSchemaColumns({})
+    setSchemaColumnTypes({})
     setRules([])
     setRun(null)
     setError('')
@@ -121,6 +152,7 @@ function App() {
       const result = await api.inspect({ sql, dialect, seed, default_rows: defaultRows })
       setTables(Object.fromEntries(result.tables.map((table) => [table.name, { rows: table.rows, columns: {} }])))
       setSchemaColumns(Object.fromEntries(result.tables.map((table) => [table.name, table.columns])))
+      setSchemaColumnTypes(Object.fromEntries(result.tables.map((table) => [table.name, table.column_types])))
       setRules([])
       setInspected(true)
       setRuleDraft((draft) => ({ ...draft, table: result.tables[0]?.name ?? '', column: result.tables[0]?.columns[0] ?? '' }))
@@ -166,7 +198,7 @@ function App() {
     }
     const candidate = { ...ruleDraft, column, id: Date.now() }
     try {
-      parseRule(candidate)
+      parseRule(candidate, schemaColumnTypes[candidate.table]?.[column] ?? '')
       if (rules.some((rule) => rule.table === candidate.table && rule.column === column && rule.type === candidate.type)) {
         throw new Error('A rule of this type already exists for that column.')
       }
@@ -187,7 +219,7 @@ function App() {
       for (const rule of rules) {
         configuredTables[rule.table].columns[rule.column] = {
           ...configuredTables[rule.table].columns[rule.column],
-          ...parseRule(rule),
+          ...parseRule(rule, schemaColumnTypes[rule.table]?.[rule.column] ?? ''),
         }
       }
       const result = await api.generate({

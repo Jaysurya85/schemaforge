@@ -23,7 +23,8 @@ def test_inspection_returns_only_real_columns() -> None:
     )
     assert response.status_code == 200, response.text
     assert response.json()["tables"] == [
-        {"name": "customers", "rows": 10, "columns": ["id", "name", "email"]}
+        {"name": "customers", "rows": 10, "columns": ["id", "name", "email"],
+         "column_types": {"id": "INTEGER", "name": "TEXT", "email": "TEXT"}}
     ]
 
 
@@ -87,3 +88,21 @@ def test_capacity_failure_returns_only_the_cause(monkeypatch: pytest.MonkeyPatch
     assert len(detail["errors"]) == 1
     assert detail["errors"][0].startswith("Cannot generate 100 rows for customers.id.")
     assert "Welcome to Schemaforge" in detail["log"]
+
+
+def test_numeric_value_list_reports_capacity_instead_of_type_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    response = client.post(
+        "/api/runs",
+        json={
+            "sql": "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT);",
+            "tables": {"customers": {"rows": 100, "columns": {"id": {"values": [1, 5]}}}},
+        },
+    )
+    assert response.status_code == 422
+    errors = response.json()["detail"]["errors"]
+    assert len(errors) == 1
+    assert errors[0].startswith("Cannot generate 100 rows for customers.id.")
+    assert "2 distinct values" in errors[0]
