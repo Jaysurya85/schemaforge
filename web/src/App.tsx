@@ -4,7 +4,7 @@ import {
   CircleCheck, Code2, Database, FileCode2, Github, LoaderCircle, Play,
   Moon, Plus, RotateCcw, Settings2, Sparkles, Sun, Table2, Trash2, WandSparkles,
 } from 'lucide-react'
-import { api, type ColumnSettings, type Dialect, type FilePreview, type OutputFormat, type RunResult, type TableSettings, type Validation } from './api'
+import { api, type AIReview, type ColumnSettings, type ConfigDraft, type Dialect, type FilePreview, type OutputFormat, type RunInput, type RunResult, type TableSettings, type Validation } from './api'
 import './styles.css'
 
 const starterSql = `CREATE TABLE customers (
@@ -52,7 +52,20 @@ function parseRule(rule: Rule, columnType: string): ColumnSettings {
     }
     return { null_probability: probability / 100 }
   }
-  const values = rule.value.split(',').map((value) => value.trim()).filter(Boolean)
+  let values: string[]
+  if (rule.value.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(rule.value)
+      if (!Array.isArray(parsed) || parsed.some((value) => !['string', 'number', 'boolean'].includes(typeof value))) {
+        throw new Error('Invalid list')
+      }
+      values = parsed.map(String)
+    } catch {
+      throw new Error(`Enter a valid value list for ${label}.`)
+    }
+  } else {
+    values = rule.value.split(',').map((value) => value.trim()).filter(Boolean)
+  }
   if (!values.length) throw new Error(`Add at least one value for ${label}.`)
   if (integerTypes.has(columnType)) {
     const numbers = values.map(Number)
@@ -75,6 +88,34 @@ function parseRule(rule: Rule, columnType: string): ColumnSettings {
     return { values: values.map((value) => value.toLowerCase() === 'true') }
   }
   return { values }
+}
+
+function runSignature(input: RunInput): string {
+  const tables = Object.fromEntries(Object.entries(input.tables).sort(([a], [b]) => a.localeCompare(b)).map(([name, table]) => [
+    name, { rows: table.rows, columns: Object.fromEntries(Object.entries(table.columns ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([column, settings]) => [
+      column, Object.fromEntries(Object.entries(settings).filter(([, value]) => value !== null && value !== undefined).sort(([a], [b]) => a.localeCompare(b))),
+    ])) },
+  ]))
+  return JSON.stringify({ sql: input.sql, dialect: input.dialect, seed: input.seed,
+    default_rows: input.default_rows, realistic: input.realistic, output_format: input.output_format,
+    validate_with: input.validate_with, tables })
+}
+
+function rulesFromRequest(input: RunInput): Rule[] {
+  const result: Rule[] = []
+  let id = 1
+  for (const [table, settings] of Object.entries(input.tables)) {
+    for (const [column, columnSettings] of Object.entries(settings.columns ?? {})) {
+      if (columnSettings.values?.length) result.push({ id: id++, table, column, type: 'values', value: JSON.stringify(columnSettings.values) })
+      else if (columnSettings.min !== undefined && columnSettings.min !== null && columnSettings.max !== undefined && columnSettings.max !== null) {
+        result.push({ id: id++, table, column, type: 'range', value: `${columnSettings.min}, ${columnSettings.max}` })
+      }
+      if (columnSettings.null_probability !== undefined && columnSettings.null_probability !== null) {
+        result.push({ id: id++, table, column, type: 'nulls', value: String(columnSettings.null_probability * 100) })
+      }
+    }
+  }
+  return result
 }
 
 function Preview({ preview }: { preview: FilePreview }) {
@@ -102,8 +143,11 @@ function App() {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [engineStatus, setEngineStatus] = useState<'checking' | 'ready' | 'unavailable'>('checking')
   const [theme, setTheme] = useState<'light' | 'dark'>(() => window.localStorage.getItem('schemaforge-theme') === 'dark' ? 'dark' : 'light')
-  const [busy, setBusy] = useState<'inspect' | 'generate' | null>(null)
+  const [busy, setBusy] = useState<'inspect' | 'plan' | 'generate' | null>(null)
   const [error, setError] = useState('')
+  const [testingGoal, setTestingGoal] = useState('')
+  const [review, setReview] = useState<(AIReview & { origin: string }) | null>(null)
+  const [acceptedDraft, setAcceptedDraft] = useState<ConfigDraft | null>(null)
   const [run, setRun] = useState<RunResult | null>(null)
   const [activePreview, setActivePreview] = useState(0)
 
@@ -122,6 +166,23 @@ function App() {
 
   const totalRows = useMemo(() => Object.values(tables).reduce((sum, table) => sum + table.rows, 0), [tables])
   const canGenerate = inspected && Object.keys(tables).length > 0 && !busy && engineStatus === 'ready'
+
+  function buildRunInput(): RunInput {
+    const configuredTables = structuredClone(tables)
+    for (const rule of rules) {
+      configuredTables[rule.table].columns[rule.column] = {
+        ...configuredTables[rule.table].columns[rule.column],
+        ...parseRule(rule, schemaColumnTypes[rule.table]?.[rule.column] ?? ''),
+      }
+    }
+    return { sql, dialect, seed, default_rows: defaultRows, realistic,
+      tables: configuredTables, output_format: format, validate_with: validation }
+  }
+
+  let currentSignature = ''
+  try { currentSignature = runSignature(buildRunInput()) } catch { /* The form shows the rule error on submit. */ }
+  const acceptedCurrent = !!acceptedDraft && currentSignature === runSignature(acceptedDraft.request)
+  const reviewVisible = review && (review.origin === `${currentSignature}:${testingGoal.trim()}` || acceptedCurrent)
 
   function updateSql(value: string) {
     setSql(value)
@@ -215,24 +276,43 @@ function App() {
     setError('')
     setRun(null)
     try {
-      const configuredTables = structuredClone(tables)
-      for (const rule of rules) {
-        configuredTables[rule.table].columns[rule.column] = {
-          ...configuredTables[rule.table].columns[rule.column],
-          ...parseRule(rule, schemaColumnTypes[rule.table]?.[rule.column] ?? ''),
-        }
-      }
-      const result = await api.generate({
-        sql, dialect, seed, default_rows: defaultRows, realistic,
-        tables: configuredTables, output_format: format, validate_with: validation,
-      })
+      const result = acceptedCurrent && acceptedDraft
+        ? await api.generateDraft(acceptedDraft.id)
+        : await api.generate(buildRunInput())
       setRun(result)
+      setAcceptedDraft(null)
       setActivePreview(0)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Generation failed.')
     } finally {
       setBusy(null)
     }
+  }
+
+  async function planWithAI() {
+    setBusy('plan')
+    setError('')
+    setReview(null)
+    setAcceptedDraft(null)
+    try {
+      const input = buildRunInput()
+      const result = await api.plan(input, testingGoal.trim())
+      setReview({ ...result, origin: `${runSignature(input)}:${testingGoal.trim()}` })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'AI planning failed.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  function applyReview() {
+    if (!review) return
+    const input = review.draft.request
+    setTables(Object.fromEntries(Object.entries(input.tables).map(([name, settings]) => [name, { rows: settings.rows, columns: {} }])))
+    setRules(rulesFromRequest(input))
+    setAcceptedDraft(review.draft)
+    setAdvancedOpen(true)
+    setError('')
   }
 
   return <div className="app-shell">
@@ -272,12 +352,14 @@ function App() {
               {inspected && <div className="advanced"><button className="advanced-trigger" type="button" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen(!advancedOpen)}><span><Settings2 size={16} /> Column rules <span className="rule-count">{rules.length}</span></span><ChevronDown size={16} className={advancedOpen ? 'chevron-open' : ''} /></button>{advancedOpen && <div className="advanced-body"><p>Override individual columns with a value list, numeric range, or null rate.</p>{rules.map((rule) => <div className="saved-rule" key={rule.id}><span><strong>{rule.table}.{rule.column}</strong> · {rule.type === 'nulls' ? `${rule.value}% nulls` : rule.type === 'range' ? `range ${rule.value}` : rule.value}</span><button type="button" aria-label={`Remove rule for ${rule.table}.${rule.column}`} onClick={() => setRules((current) => current.filter((item) => item.id !== rule.id))}><Trash2 size={14} /></button></div>)}<div className="rule-fields"><select aria-label="Rule table" value={ruleDraft.table} onChange={(event) => setRuleDraft({ ...ruleDraft, table: event.target.value, column: schemaColumns[event.target.value]?.[0] ?? '' })}>{Object.keys(tables).map((name) => <option key={name}>{name}</option>)}</select><select aria-label="Rule column" value={ruleDraft.column} onChange={(event) => setRuleDraft({ ...ruleDraft, column: event.target.value })}>{(schemaColumns[ruleDraft.table] ?? []).map((name) => <option key={name} value={name}>{name}</option>)}</select><select aria-label="Rule type" value={ruleDraft.type} onChange={(event) => setRuleDraft({ ...ruleDraft, type: event.target.value as RuleDraft['type'], value: '' })}><option value="values">Value list</option><option value="range">Number range</option><option value="nulls">Null rate</option></select><input aria-label="Rule value" placeholder={ruleDraft.type === 'range' ? 'min, max' : ruleDraft.type === 'nulls' ? 'Percent (0–100)' : 'value 1, value 2'} value={ruleDraft.value} onChange={(event) => setRuleDraft({ ...ruleDraft, value: event.target.value })} /></div><button className="small-button" type="button" onClick={addRule}><Plus size={14} /> Add rule</button></div>}</div>}
             </div>
 
+            {inspected && <div className="panel ai-panel"><div className="panel-heading"><div className="step-number ai-step"><Sparkles size={16} /></div><div><h3>Plan a test with AI</h3><p>Describe the data shape you need. Review every change before generating.</p></div></div><label className="ai-label" htmlFor="testing-goal">What would you like to test?</label><textarea id="testing-goal" className="ai-prompt" value={testingGoal} onChange={(event) => setTestingGoal(event.target.value)} placeholder="Example: Create 1,000 customers and 3,000 orders. Give customers a mix of gold and silver tiers." rows={3} /><div className="ai-actions"><span>Planning sends your schema, current settings, and this request to OpenAI.</span><button className="button button-secondary" type="button" disabled={!!busy || testingGoal.trim().length < 3 || engineStatus !== 'ready'} onClick={planWithAI}>{busy === 'plan' ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}{busy === 'plan' ? 'Planning…' : 'Create plan'}</button></div>{reviewVisible && <div className="ai-review"><div className="ai-review-heading"><strong>Review the proposed changes</strong><span>Validated by SchemaForge</span></div><div className="ai-plan-list">{review.plan.table_rows.map((item) => <div key={`rows-${item.table}`}><Table2 size={14} /><span>{item.table}: {formatNumber(item.rows)} rows</span></div>)}{review.plan.number_ranges.map((item) => <div key={`range-${item.table}-${item.column}`}><Settings2 size={14} /><span>{item.table}.{item.column}: {item.min} to {item.max}</span></div>)}{review.plan.value_lists.map((item) => <div key={`values-${item.table}-${item.column}`}><Settings2 size={14} /><span>{item.table}.{item.column}: {item.values.join(', ')}</span></div>)}{review.plan.null_rates.map((item) => <div key={`nulls-${item.table}-${item.column}`}><Settings2 size={14} /><span>{item.table}.{item.column}: {formatNumber(item.probability * 100, 1)}% null</span></div>)}{!review.plan.table_rows.length && !review.plan.number_ranges.length && !review.plan.value_lists.length && !review.plan.null_rates.length && <p>No settings changed.</p>}</div>{review.plan.assumptions.length > 0 && <div className="ai-notes"><strong>Assumptions</strong><ul>{review.plan.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></div>}{review.plan.unapplied.length > 0 && <div className="ai-notes unapplied"><strong>Not applied</strong><ul>{review.plan.unapplied.map((item, index) => <li key={index}>{item.request}: {item.explanation}</li>)}</ul></div>}<details className="yaml-preview" open><summary>Generated configuration · YAML</summary><pre>{review.draft.yaml}</pre></details>{acceptedCurrent ? <div className="ai-applied"><CircleCheck size={16} /> Plan applied to the controls. Generate to use this exact configuration.</div> : <button className="button button-secondary ai-apply" type="button" onClick={applyReview}><Check size={16} /> Apply plan to controls</button>}</div>}{acceptedDraft && !acceptedCurrent && <p className="ai-stale">The controls changed after applying the plan. Create a new plan to review updated YAML.</p>}</div>}
+
             <div className="panel output-panel"><div className="panel-heading"><div className="step-number">03</div><div><h3>Choose your output</h3><p>Pick a format and validation method.</p></div></div><div className="format-options" role="group" aria-label="Output format"><button className={format === 'sql' ? 'active' : ''} onClick={() => changeFormat('sql')} type="button"><FileCode2 size={17} /><strong>SQL</strong><span>Insert statements</span></button><button className={format === 'csv' ? 'active' : ''} onClick={() => changeFormat('csv')} type="button"><Table2 size={17} /><strong>CSV</strong><span>One file per table</span></button><button className={format === 'postgres_copy' ? 'active' : ''} onClick={() => changeFormat('postgres_copy')} type="button"><Database size={17} /><strong>PG COPY</strong><span>Bulk import script</span></button></div><div className="validation-row"><label htmlFor="validation">Validate with</label><select id="validation" value={validation} onChange={(event) => setValidation(event.target.value as Validation)}><option value="none">No validation</option>{format === 'sql' && dialect === 'sqlite' && <option value="sqlite">SQLite</option>}{dialect === 'postgres' && format !== 'csv' && <option value="postgres">PostgreSQL</option>}</select></div></div>
 
             {error && <div className="error-box" role="alert"><CircleAlert size={18} /><pre>{error}</pre></div>}
             {engineStatus === 'unavailable' && <div className="error-box engine-error"><CircleAlert size={18} /><div><strong>Engine unavailable</strong><p>Build the C++ CLI and start the API server to generate data.</p></div></div>}
             <button className="button button-primary generate-button" disabled={!canGenerate} onClick={generate} type="button">{busy === 'generate' ? <LoaderCircle size={18} className="spin" /> : <Play size={17} fill="currentColor" />} {busy === 'generate' ? 'Generating dataset…' : 'Generate dataset'} <ArrowRight size={17} /></button>
-            <p className="under-button">Runs locally. Your schema stays on this machine.</p>
+            <p className="under-button">Dataset generation runs locally. AI planning sends your schema and request to OpenAI.</p>
           </div>
 
           <div className="result-column"><div className="panel result-panel"><div className="result-top"><div><span className="section-kicker">OUTPUT / PREVIEW</span><h3>{run ? 'Your dataset is ready' : 'The result will appear here'}</h3></div>{run && <span className="success-pill"><Check size={13} /> Complete</span>}</div>{run ? <><div className="metrics"><div><span>ROWS GENERATED</span><strong>{formatNumber(run.metrics.generation?.total_rows ?? run.tables.reduce((sum, table) => sum + table.rows, 0))}</strong></div><div><span>GENERATION TIME</span><strong>{typeof run.metrics.generation?.time_seconds === 'number' ? `${formatNumber(run.metrics.generation.time_seconds, 2)}s` : '—'}</strong></div><div><span>OUTPUT SIZE</span><strong>{typeof run.metrics.generation?.output_file_size_bytes === 'number' ? `${formatNumber(run.metrics.generation.output_file_size_bytes / 1024, 1)} KB` : '—'}</strong></div></div><div className="result-section-label"><span>FILE PREVIEW</span><span>First rows / lines</span></div><div className="preview-tabs" role="tablist" aria-label="Output files">{run.previews.map((preview, index) => <button role="tab" aria-selected={activePreview === index} className={activePreview === index ? 'active' : ''} key={preview.name} onClick={() => setActivePreview(index)} type="button">{preview.kind === 'table' ? <Table2 size={14} /> : <FileCode2 size={14} />}{preview.name}</button>)}</div>{run.previews[activePreview] && <Preview preview={run.previews[activePreview]} />}<div className="result-footer"><div><CircleCheck size={17} /><span>{validation === 'none' ? 'Generation complete' : `${validation === 'sqlite' ? 'SQLite' : 'PostgreSQL'} validation: ${run.metrics.validation?.[validation] ?? 'complete'}`}</span></div><a className="button button-primary download-button" href={api.downloadUrl(run.id)} download={run.download_name}><ArrowDownToLine size={16} /> Download {format === 'csv' ? 'ZIP' : 'SQL'}</a></div><details className="engine-log"><summary>Engine log</summary><pre>{run.log}</pre></details></> : <div className="empty-result"><div className="empty-visual"><div className="empty-icon"><WandSparkles size={30} strokeWidth={1.4} /></div><div className="empty-track"><span /><span /><span /></div><div className="empty-output"><Table2 size={22} strokeWidth={1.5} /><span>DATA</span></div></div><h4>From schema to usable data</h4><p>Inspect your tables, tune the row counts, then generate. A preview and download will appear right here.</p><div className="empty-steps"><span><i>1</i> Schema</span><ArrowRight size={14} /><span><i>2</i> Configure</span><ArrowRight size={14} /><span><i>3</i> Export</span></div></div>}</div><div className="aside-note"><Sparkles size={16} /><span>Built for local iteration with the open source SchemaForge engine.</span></div></div>

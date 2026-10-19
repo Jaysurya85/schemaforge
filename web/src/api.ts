@@ -33,6 +33,19 @@ export type RunInput = SchemaInput & {
   validate_with: Validation
 }
 
+export type AIPlan = {
+  version: 1
+  table_rows: Array<{ table: string; rows: number }>
+  number_ranges: Array<{ table: string; column: string; min: number; max: number }>
+  value_lists: Array<{ table: string; column: string; values: Array<string | number | boolean> }>
+  null_rates: Array<{ table: string; column: string; probability: number }>
+  assumptions: string[]
+  unapplied: Array<{ request: string; reason: string; explanation: string }>
+}
+
+export type ConfigDraft = { id: string; yaml: string; request: RunInput }
+export type AIReview = { plan: AIPlan; draft: ConfigDraft }
+
 export type FilePreview =
   | { name: string; kind: 'code'; lines: string[] }
   | { name: string; kind: 'table'; rows: string[][] }
@@ -90,5 +103,9 @@ export const api = {
     request<InspectResult>('/api/schemas/inspect', { method: 'POST', body: JSON.stringify(input) }),
   generate: (input: RunInput) =>
     request<RunResult>('/api/runs', { method: 'POST', body: JSON.stringify(input) }),
+  plan: (input: RunInput, testingGoal: string) =>
+    request<AIReview>('/api/ai/plan', { method: 'POST', body: JSON.stringify({ request: input, testing_goal: testingGoal }) }),
+  generateDraft: (draftId: string) =>
+    request<RunResult>(`/api/configs/${draftId}/generate`, { method: 'POST' }),
   downloadUrl: (runId: string) => `/api/runs/${runId}/download`,
 }
