@@ -181,7 +181,8 @@ def preview_file(path: Path, limit: int = 12) -> dict[str, Any]:
     return {"name": path.name, "kind": "code", "lines": lines}
 
 
-def generate(request: RunRequest) -> dict[str, Any]:
+def compose_generation_config(request: RunRequest, directory: Path) -> dict[str, Any]:
+    """Build the one engine config shared by manual and future AI runs."""
     if request.output_format == "postgres_copy" and request.dialect != "postgres":
         raise EngineError("PostgreSQL COPY output requires the PostgreSQL dialect.")
     if request.validate_with == "sqlite" and (request.dialect != "sqlite" or request.output_format != "sql"):
@@ -189,37 +190,47 @@ def generate(request: RunRequest) -> dict[str, Any]:
     if request.validate_with == "postgres" and request.dialect != "postgres":
         raise EngineError("PostgreSQL validation requires the PostgreSQL dialect.")
 
+    config = initial_config(request, directory)
+    unknown_tables = set(request.tables) - set(config["tables"])
+    if unknown_tables:
+        raise EngineError("Unknown tables: " + ", ".join(sorted(unknown_tables)))
+    for name, settings in request.tables.items():
+        table = config["tables"][name]
+        table["rows"] = settings.rows
+        if settings.columns:
+            table["columns"] = {
+                column: value.model_dump(by_alias=True, exclude_none=True)
+                for column, value in settings.columns.items()
+            }
+
+    config["generation"]["realistic"] = request.realistic
+    config["validation"] = {
+        "sqlite": request.validate_with == "sqlite",
+        "postgres": request.validate_with == "postgres",
+    }
+    config["benchmark"] = {"file": str(directory / "benchmark.yaml")}
+    if request.output_format == "csv":
+        config["output"] = {"format": "csv", "directory": str(directory / "csv")}
+    else:
+        suffix = "copy.sql" if request.output_format == "postgres_copy" else "sql"
+        config["output"] = {"format": request.output_format, "file": str(directory / f"output.{suffix}")}
+    return config
+
+
+def render_generation_config(config: dict[str, Any]) -> str:
+    """Use one stable serialization for previews and engine input."""
+    return yaml.safe_dump(config, sort_keys=False)
+
+
+def generate(request: RunRequest) -> dict[str, Any]:
     run_id = uuid.uuid4().hex
     directory = run_root() / run_id
     directory.mkdir(parents=True, exist_ok=False)
     try:
-        config = initial_config(request, directory)
-        unknown_tables = set(request.tables) - set(config["tables"])
-        if unknown_tables:
-            raise EngineError("Unknown tables: " + ", ".join(sorted(unknown_tables)))
-        for name, settings in request.tables.items():
-            table = config["tables"][name]
-            table["rows"] = settings.rows
-            if settings.columns:
-                table["columns"] = {
-                    column: value.model_dump(by_alias=True, exclude_none=True)
-                    for column, value in settings.columns.items()
-                }
-
-        config["generation"]["realistic"] = request.realistic
-        config["validation"] = {
-            "sqlite": request.validate_with == "sqlite",
-            "postgres": request.validate_with == "postgres",
-        }
-        config["benchmark"] = {"file": str(directory / "benchmark.yaml")}
-        if request.output_format == "csv":
-            config["output"] = {"format": "csv", "directory": str(directory / "csv")}
-        else:
-            suffix = "copy.sql" if request.output_format == "postgres_copy" else "sql"
-            config["output"] = {"format": request.output_format, "file": str(directory / f"output.{suffix}")}
+        config = compose_generation_config(request, directory)
 
         config_path = directory / "schemaforge.yaml"
-        config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+        config_path.write_text(render_generation_config(config), encoding="utf-8")
         log = call_engine(["generate", "--config", str(config_path)])
         if request.output_format == "csv":
             files = sorted((directory / "csv").glob("*.csv"))
