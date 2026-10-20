@@ -9,10 +9,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from .ai_plan import (PlanApplicationError, apply_ai_plan, check_explicit_requests,
-                      drop_unrequested_zero_null_rates, explain_unsupported_fanout,
-                      normalize_fanout_plan)
-from .model_provider import NaviGatorProvider, OpenAIProvider, PlanProvider, ProviderError
+from .ai_plan import (PlanApplicationError, apply_ai_plan, canonicalize_model_targets, check_explicit_requests,
+                      drop_unchanged_model_rules, drop_unrequested_zero_null_rates, explain_unsupported_fanout,
+                      ground_explicit_settings, normalize_fanout_plan)
+from .model_provider import InvalidPlanError, NaviGatorProvider, OpenAIProvider, PlanProvider, ProviderError
 from .models import RunRequest, SchemaRequest
 from .runner import (EngineError, binary_path, call_engine, download_path, generate,
                      generate_prepared, inspect_schema, prepare_config, read_run)
@@ -120,20 +120,23 @@ def create_ai_plan(body: PlanningRequest) -> dict[str, object]:
         current = body.request.model_dump(by_alias=True)
         feedback: str | None = None
         for attempt in range(2):
-            plan = provider.propose(
-                sql=body.request.sql, request=body.testing_goal, inspection=inspection,
-                current=current, feedback=feedback)
-            plan = drop_unrequested_zero_null_rates(body.testing_goal, plan)
-            plan = normalize_fanout_plan(body.testing_goal, plan, inspection, current)
             try:
+                plan = provider.propose(
+                    sql=body.request.sql, request=body.testing_goal, inspection=inspection,
+                    current=current, feedback=feedback)
+                plan = canonicalize_model_targets(plan, inspection)
+                plan = drop_unchanged_model_rules(plan, current)
+                plan = ground_explicit_settings(body.testing_goal, plan, inspection)
+                plan = drop_unrequested_zero_null_rates(body.testing_goal, plan, inspection)
+                plan = normalize_fanout_plan(body.testing_goal, plan, inspection, current)
                 check_explicit_requests(body.testing_goal, plan, inspection, current)
+                plan = explain_unsupported_fanout(body.testing_goal, plan, inspection, current)
+                applied = apply_ai_plan(body.request, plan, inspection)
                 break
-            except PlanApplicationError as error:
+            except (InvalidPlanError, PlanApplicationError) as error:
                 if attempt:
                     raise
                 feedback = str(error)
-        plan = explain_unsupported_fanout(body.testing_goal, plan, inspection, current)
-        applied = apply_ai_plan(body.request, plan, inspection)
         draft = prepare_config(applied)
         return {"plan": plan.model_dump(), "draft": draft}
     except EngineError as error:

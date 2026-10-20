@@ -15,6 +15,10 @@ class ProviderError(Exception):
     pass
 
 
+class InvalidPlanError(ProviderError):
+    """The provider responded, but its structured proposal was unusable."""
+
+
 class PlanProvider(Protocol):
     def propose(self, *, sql: str, request: str, inspection: dict[str, Any],
                 current: dict[str, Any], feedback: str | None = None) -> AIPlan: ...
@@ -51,6 +55,10 @@ SYSTEM_PROMPT = (
     "value lists, and null rates. Do not claim distributions or relationship patterns are "
     "implemented; put explicitly requested unsupported behavior in unapplied. "
     "Copy every explicit numeric row count, numeric range, and null percentage exactly. "
+    "Use canonical table and column names from inspection even when the user says a singular "
+    "name or a spaced column name. Return sparse changes; do not echo unchanged controls. "
+    "Convert null percentages to probabilities between 0 and 1 (10% means 0.1). "
+    "Use JSON value types that match the SQL column type. "
     "Current row settings are editable defaults, not maximum limits. When a parent count and "
     "children-per-parent are given, calculate the child row count, but mark the exact "
     "per-parent assignment as an unsupported relationship. Do not call a current row count a limit. "
@@ -131,7 +139,8 @@ class OpenAIProvider:
         try:
             return AIPlan.model_validate_json(texts[0])
         except ValidationError as error:
-            raise ProviderError("OpenAI returned a plan that failed SchemaForge validation.") from error
+            issue = error.errors()[0]
+            raise InvalidPlanError(f"OpenAI returned an invalid plan: {issue['loc']} {issue['msg']}") from error
 
 
 class NaviGatorProvider:
@@ -176,4 +185,5 @@ class NaviGatorProvider:
         try:
             return AIPlan.model_validate_json(content)
         except ValidationError as error:
-            raise ProviderError("NaviGator returned a plan that failed SchemaForge validation.") from error
+            issue = error.errors()[0]
+            raise InvalidPlanError(f"NaviGator returned an invalid plan: {issue['loc']} {issue['msg']}") from error

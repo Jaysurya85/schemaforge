@@ -4,7 +4,8 @@ import json
 import pytest
 
 from schemaforge_api.app import planning_provider
-from schemaforge_api.model_provider import NaviGatorProvider, OpenAIProvider, ProviderError, planning_messages
+from schemaforge_api.model_provider import (InvalidPlanError, NaviGatorProvider, OpenAIProvider,
+                                            ProviderError, planning_messages)
 
 
 EMPTY_PLAN = {"version": 1, "table_rows": [], "number_ranges": [], "value_lists": [],
@@ -41,7 +42,7 @@ def test_openai_adapter_rejects_invalid_response(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("schemaforge_api.model_provider.urllib.request.urlopen", lambda *_args, **_kwargs:
                         FakeResponse(json.dumps({"status": "completed", "output": [{"type": "message", "content": [
                             {"type": "output_text", "text": '{"version":1}'}]}]}).encode()))
-    with pytest.raises(ProviderError, match="failed SchemaForge validation"):
+    with pytest.raises(InvalidPlanError, match="invalid plan"):
         OpenAIProvider(api_key="test-only").propose(sql="x", request="x", inspection={}, current={})
 
 
@@ -78,7 +79,7 @@ def test_navigator_adapter_rejects_invalid_response(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("schemaforge_api.model_provider.urllib.request.urlopen", lambda *_args, **_kwargs:
                         FakeResponse(json.dumps({"choices": [{"finish_reason": "stop", "message": {
                             "content": '{"version":1}'}}]}).encode()))
-    with pytest.raises(ProviderError, match="failed SchemaForge validation"):
+    with pytest.raises(InvalidPlanError, match="invalid plan"):
         NaviGatorProvider(api_key="test-only").propose(sql="x", request="x", inspection={}, current={})
 
 

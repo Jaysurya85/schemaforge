@@ -197,10 +197,16 @@ def test_vague_fanout_uses_current_parent_count_for_reviewable_plan() -> None:
 
 def test_unrequested_zero_null_defaults_are_removed() -> None:
     plan = plan_with(null_rates=[{"table": "orders", "column": "customer_id", "probability": 0}])
-    cleaned = drop_unrequested_zero_null_rates("Every customer should have 2 orders", plan)
+    cleaned = drop_unrequested_zero_null_rates("Every customer should have 2 orders", plan, INSPECTION)
     assert cleaned.null_rates == []
     assert plan.null_rates != []
-    assert drop_unrequested_zero_null_rates("Make 0% of customer_id null", plan).null_rates == plan.null_rates
+    assert drop_unrequested_zero_null_rates("Make 0% of customer_id null", plan, INSPECTION).null_rates == plan.null_rates
+    mixed = plan_with(null_rates=[
+        {"table": "customers", "column": "phone", "probability": 0.1},
+        {"table": "orders", "column": "customer_id", "probability": 0},
+    ])
+    cleaned_mixed = drop_unrequested_zero_null_rates("Make 10% of customers.phone null", mixed, INSPECTION)
+    assert [(item.table, item.column) for item in cleaned_mixed.null_rates] == [("customers", "phone")]
 
 
 def test_plan_must_not_invent_ranges_values_or_null_rates() -> None:

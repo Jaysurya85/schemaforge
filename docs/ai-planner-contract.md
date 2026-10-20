@@ -10,6 +10,11 @@ and row generation.
 
 - The model proposes settings. It never writes SchemaForge YAML, SQL schema, or
   generated rows. Python builds the YAML from the CLI's base config.
+- For clear requests, Python independently grounds table counts, numeric
+  ranges, allowed value lists, and null percentages against inspected schema
+  names. These explicit settings override an omitted or miscopied model field.
+  The model still helps interpret less structured prose; no free-form request
+  is assumed to be fully understood without review.
 - A validated proposal fills the Shape the data controls but does not start
   generation. The user reviews the settings, unapplied requests, and read-only
   YAML, and can undo the AI changes.
@@ -59,6 +64,19 @@ through 1. It is a sampling probability, not a promise of an exact percentage
 in every dataset. `assumptions` contains short user-facing sentences about choices the
 request did not state explicitly. Each `unapplied` entry quotes the relevant
 request, names a reason, and explains what was not done.
+
+The four current AI-to-config paths are:
+
+| Request example | Proposed config |
+| --- | --- |
+| `250 rows of user` with a `users` table | `tables.users.rows: 250` |
+| `order id between 2 to 20` | `tables.orders.columns.id: {min: 2, max: 20}` |
+| `Use only pending and paid for orders.status` | `tables.orders.columns.status.values: [pending, paid]` |
+| `Make 10% of orders.coupon_code values null` | `tables.orders.columns.coupon_code.null_probability: 0.1` |
+
+The C++ preflight still rejects impossible combinations. For example, a
+unique order ID range of 2–20 cannot produce 100 orders. Other existing
+settings stay in the draft unless the request changes them.
 
 Allowed `unapplied.reason` values for v1 are `unsupported_distribution`,
 `unsupported_relationship`, `unknown_schema_field`, `ambiguous_request`, and

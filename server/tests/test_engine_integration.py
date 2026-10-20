@@ -13,7 +13,7 @@ from schemaforge_api.app import app
 from schemaforge_api.models import RunRequest
 from schemaforge_api.runner import inspect_schema
 from schemaforge_api.runner import initial_config, render_generation_config
-from schemaforge_api.model_provider import ProviderError
+from schemaforge_api.model_provider import InvalidPlanError, ProviderError
 
 
 pytestmark = pytest.mark.skipif(
@@ -65,7 +65,7 @@ def test_ai_endpoint_returns_review_draft_without_generation(monkeypatch: pytest
     assert (tmp_path / "runs" / data["draft"]["id"] / "schemaforge.yaml").read_text() == data["draft"]["yaml"]
 
 
-def test_ai_endpoint_retries_a_plan_that_changes_an_explicit_count(
+def test_ai_endpoint_corrects_a_model_that_changes_an_explicit_count(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
@@ -86,8 +86,31 @@ def test_ai_endpoint_retries_a_plan_that_changes_an_explicit_count(
     response = client.post("/api/ai/plan", json=body)
     assert response.status_code == 200, response.text
     assert response.json()["draft"]["request"]["tables"]["customers"]["rows"] == 4
-    assert provider.feedback[0] is None
-    assert "requested 4 rows" in provider.feedback[1]
+    assert provider.feedback == [None]
+
+
+def test_ai_endpoint_retries_invalid_model_output_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+
+    class Provider:
+        feedback: list[str | None] = []
+
+        def propose(self, **kwargs):
+            self.feedback.append(kwargs["feedback"])
+            if len(self.feedback) == 1:
+                raise InvalidPlanError("Model returned an invalid probability")
+            return AIPlan.model_validate(base_plan())
+
+    provider = Provider()
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: provider)
+    body = planning_body()
+    body["testing_goal"] = "Generate 4 customers."
+    response = client.post("/api/ai/plan", json=body)
+    assert response.status_code == 200, response.text
+    assert provider.feedback == [None, "Model returned an invalid probability"]
+    assert response.json()["draft"]["request"]["tables"]["customers"]["rows"] == 4
 
 
 def test_ai_endpoint_corrects_derived_order_count_and_explains_fanout_limit(
@@ -177,6 +200,49 @@ def test_ai_endpoint_accepts_repeated_current_counts_for_value_request(
     draft = response.json()["draft"]
     assert all(draft["request"]["tables"][name]["rows"] == 100 for name in table_names)
     assert draft["request"]["tables"]["orders"]["columns"]["status"]["values"] == ["pending", "paid"]
+
+
+def test_ai_endpoint_grounds_all_four_rule_types_when_model_omits_them(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(base_plan()))
+    sql = (
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT); "
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id), "
+        "status TEXT, total_amount DECIMAL(10, 2), coupon_code TEXT);"
+    )
+    response = client.post("/api/ai/plan", json={
+        "request": {"sql": sql, "validate_with": "none",
+                    "tables": {"users": {"rows": 100}, "orders": {"rows": 100}}},
+        "testing_goal": (
+            "Create 250 rows of user. Set orders.total_amount between 2 to 20. "
+            "Use only pending and paid for orders.status. "
+            "Make 10% of orders.coupon_code values null."
+        ),
+    })
+    assert response.status_code == 200, response.text
+    draft = response.json()["draft"]
+    assert draft["request"]["tables"]["users"]["rows"] == 250
+    columns = draft["request"]["tables"]["orders"]["columns"]
+    assert columns["total_amount"] == {"min": 2.0, "max": 20.0, "values": None, "null_probability": None}
+    assert columns["status"]["values"] == ["pending", "paid"]
+    assert columns["coupon_code"]["null_probability"] == 0.1
+    assert "null_probability: 0.1" in draft["yaml"]
+
+
+def test_ai_endpoint_rejects_unique_id_range_too_small_for_requested_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(base_plan()))
+    response = client.post("/api/ai/plan", json={
+        "request": {"sql": "CREATE TABLE orders (id INTEGER PRIMARY KEY);", "validate_with": "none",
+                    "tables": {"orders": {"rows": 100}}},
+        "testing_goal": "Set order id between 2 to 20.",
+    })
+    assert response.status_code == 422
+    assert "Cannot generate 100 rows" in str(response.json()["detail"])
 
 
 def test_ambiguous_ai_request_is_visible_but_does_not_change_settings(

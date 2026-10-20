@@ -5,8 +5,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, ValidationError, model_validator
 
+from .explicit_requests import extract_explicit_settings, row_counts, singular
 from .models import ColumnSettings, RunRequest, TableSettings
 
 
@@ -125,22 +126,111 @@ class FanoutRequest:
 
 
 def _mentioned_rows(goal: str, table_name: str, ignored_span: tuple[int, int] | None = None) -> set[int]:
-    quoted = re.escape(table_name)
-    patterns = (
-        rf"\b(\d[\d,]*)\s+(?:rows?\s+(?:of|for|in)\s+)?{quoted}\b",
-        rf"\b{quoted}\s+(?:with|for|of|at)\s+(\d[\d,]*)\s+rows?\b",
-    )
-    return {int(match.group(1).replace(",", "")) for pattern in patterns
-            for match in re.finditer(pattern, goal, re.IGNORECASE)
-            if ignored_span is None or not (ignored_span[0] <= match.start() and match.end() <= ignored_span[1])}
+    return row_counts(goal, table_name, ignored_span)
 
 
 def _singular_table_name(name: str) -> str:
-    if name.endswith("ies"):
-        return name[:-3] + "y"
-    if name.endswith("s"):
-        return name[:-1]
-    return name
+    return singular(name)
+
+
+def canonicalize_model_targets(plan: AIPlan, inspection: dict[str, Any]) -> AIPlan:
+    """Map harmless singular/case/spacing variants to actual schema identifiers."""
+    tables = {table["name"]: table for table in inspection["tables"]}
+    aliases: dict[str, set[str]] = {}
+    for name in tables:
+        for alias in {name, singular(name)}:
+            aliases.setdefault(alias.lower(), set()).add(name)
+
+    def table_name(raw: str) -> str:
+        matches = aliases.get(raw.lower(), set())
+        return next(iter(matches)) if len(matches) == 1 else raw
+
+    def column_name(table: str, raw: str) -> str:
+        if table not in tables:
+            return raw
+        choices = tables[table]["column_types"]
+        normalized = raw.lower().replace(" ", "_")
+        exact = [name for name in choices if name.lower() == normalized]
+        if len(exact) == 1:
+            return exact[0]
+        for prefix in (table.lower(), singular(table).lower()):
+            if normalized.startswith(prefix + "."):
+                normalized = normalized[len(prefix) + 1:]
+            if normalized.startswith(prefix + "_"):
+                normalized = normalized[len(prefix) + 1:]
+        matches = [name for name in choices if name.lower() == normalized]
+        return matches[0] if len(matches) == 1 else raw
+
+    def mapped(item: Any) -> Any:
+        table = table_name(item.table)
+        changes = {"table": table}
+        if hasattr(item, "column"):
+            changes["column"] = column_name(table, item.column)
+        return item.model_copy(update=changes)
+
+    candidate = plan.model_copy(update={
+        "table_rows": [mapped(item) for item in plan.table_rows],
+        "number_ranges": [mapped(item) for item in plan.number_ranges],
+        "value_lists": [mapped(item) for item in plan.value_lists],
+        "null_rates": [mapped(item) for item in plan.null_rates],
+    })
+    try:
+        return AIPlan.model_validate(candidate.model_dump())
+    except ValidationError as error:
+        raise PlanApplicationError(f"AI plan contains duplicate or conflicting schema targets: {error.errors()[0]['msg']}") from error
+
+
+def drop_unchanged_model_rules(plan: AIPlan, current: dict[str, Any]) -> AIPlan:
+    """Ignore settings merely echoed from the current controls."""
+    tables = current.get("tables", {})
+
+    def settings(table: str, column: str) -> dict[str, Any]:
+        return tables.get(table, {}).get("columns", {}).get(column, {})
+
+    ranges = [item for item in plan.number_ranges
+              if not (settings(item.table, item.column).get("min") == item.min
+                      and settings(item.table, item.column).get("max") == item.max)]
+    values = [item for item in plan.value_lists
+              if settings(item.table, item.column).get("values") != item.values]
+    nulls = [item for item in plan.null_rates
+             if settings(item.table, item.column).get("null_probability") != item.probability]
+    return plan.model_copy(update={"number_ranges": ranges, "value_lists": values, "null_rates": nulls})
+
+
+def ground_explicit_settings(goal: str, plan: AIPlan, inspection: dict[str, Any]) -> AIPlan:
+    """Make unambiguous user settings authoritative over a model proposal."""
+    explicit = extract_explicit_settings(goal, inspection)
+    conflicting = explicit.ranges.keys() & explicit.values.keys()
+    if conflicting:
+        targets = ", ".join(f"{table}.{column}" for table, column in sorted(conflicting))
+        raise PlanApplicationError(f"Both a range and a value list were requested for {targets}.")
+    rows = {item.table: item for item in plan.table_rows}
+    fanout = derive_fanout_request(goal, inspection)
+    for table in inspection["tables"]:
+        counts = row_counts(goal, table["name"], fanout.span if fanout is not None else None)
+        if len(counts) == 1:
+            count = next(iter(counts))
+            if count > 2_000_000:
+                raise PlanApplicationError(f"The requested {count:,} {table['name']} exceeds the 2,000,000-row table limit.")
+            rows[table["name"]] = TableRows(table=table["name"], rows=count)
+    ranges = {(item.table, item.column): item for item in plan.number_ranges}
+    values = {(item.table, item.column): item for item in plan.value_lists}
+    nulls = {(item.table, item.column): item for item in plan.null_rates}
+    try:
+        for (table, column), (minimum, maximum) in explicit.ranges.items():
+            values.pop((table, column), None)
+            ranges[(table, column)] = NumberRange(table=table, column=column, min=minimum, max=maximum)
+        for (table, column), requested in explicit.values.items():
+            ranges.pop((table, column), None)
+            values[(table, column)] = ValueList(table=table, column=column, values=requested)
+        for (table, column), probability in explicit.null_rates.items():
+            nulls[(table, column)] = NullRate(table=table, column=column, probability=probability)
+    except ValidationError as error:
+        raise PlanApplicationError(f"The requested column rule is invalid: {error.errors()[0]['msg']}") from error
+    return plan.model_copy(update={
+        "table_rows": list(rows.values()), "number_ranges": list(ranges.values()),
+        "value_lists": list(values.values()), "null_rates": list(nulls.values()),
+    })
 
 
 def derive_fanout_request(goal: str, inspection: dict[str, Any],
@@ -203,11 +293,11 @@ def normalize_fanout_plan(goal: str, plan: AIPlan, inspection: dict[str, Any],
     return plan.model_copy(update={"table_rows": rows})
 
 
-def drop_unrequested_zero_null_rates(goal: str, plan: AIPlan) -> AIPlan:
+def drop_unrequested_zero_null_rates(goal: str, plan: AIPlan, inspection: dict[str, Any]) -> AIPlan:
     """A model's zero-rate defaults add no constraint and can invalidate required columns."""
-    if re.search(r"\bnull\b", goal, re.IGNORECASE):
-        return plan
-    rates = [item for item in plan.null_rates if item.probability != 0]
+    requested = extract_explicit_settings(goal, inspection).null_rates
+    rates = [item for item in plan.null_rates
+             if item.probability != 0 or (item.table, item.column) in requested]
     return plan.model_copy(update={"null_rates": rates})
 
 
@@ -241,19 +331,40 @@ def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any],
                             current: dict[str, Any] | None = None) -> None:
     """Fail closed when a proposal contradicts simple numeric user instructions."""
     errors: list[str] = []
+    explicit = extract_explicit_settings(goal, inspection)
+    proposed_ranges = {(item.table, item.column): (item.min, item.max) for item in plan.number_ranges}
+    proposed_values = {(item.table, item.column): item.values for item in plan.value_lists}
+    proposed_nulls = {(item.table, item.column): item.probability for item in plan.null_rates}
+    for target, bounds in explicit.ranges.items():
+        if proposed_ranges.get(target) != bounds:
+            errors.append(f"AI plan did not preserve the requested range for {target[0]}.{target[1]}.")
+    for target, values in explicit.values.items():
+        if proposed_values.get(target) != values:
+            errors.append(f"AI plan did not preserve the requested values for {target[0]}.{target[1]}.")
+    for target, rate in explicit.null_rates.items():
+        if target not in proposed_nulls or not math.isclose(proposed_nulls[target], rate):
+            errors.append(f"AI plan did not preserve the requested null rate for {target[0]}.{target[1]}.")
     for item in plan.number_ranges:
+        if (item.table, item.column) in explicit.ranges:
+            continue
+        if explicit.ranges:
+            errors.append(f"AI plan invented a numeric range for {item.table}.{item.column}.")
+            continue
         minimum, maximum = re.escape(format(item.min, "g")), re.escape(format(item.max, "g"))
-        pair = rf"(?:\b{minimum}\s*(?:to|-)\s*{maximum}\b|\bbetween\s+{minimum}\s+and\s+{maximum}\b)"
+        pair = rf"(?:\b{minimum}\s*(?:to|-)\s*{maximum}\b|\bbetween\s+{minimum}\s+(?:and|to)\s+{maximum}\b)"
         if not re.search(pair, goal, re.IGNORECASE):
             errors.append(f"AI plan invented a numeric range for {item.table}.{item.column}.")
     for item in plan.value_lists:
+        if explicit.values and (item.table, item.column) not in explicit.values:
+            errors.append(f"AI plan invented a value list for {item.table}.{item.column}.")
+            continue
         for value in item.values:
             rendered = format(value, "g") if isinstance(value, (int, float)) and not isinstance(value, bool) else str(value)
             if not re.search(rf"(?<!\w){re.escape(rendered)}(?!\w)", goal, re.IGNORECASE):
                 errors.append(f"AI plan invented a value for {item.table}.{item.column}.")
                 break
     for match in re.finditer(r"\b\d+(?:\.\d+)?\s*%", goal):
-        context = goal[match.end():].split(".", 1)[0][:80]
+        context = re.split(r"\.\s+", goal[match.end():match.end() + 80], maxsplit=1)[0]
         if re.search(r"\bnull\b", context, re.IGNORECASE):
             continue
         percentage = match.group().strip()
@@ -267,8 +378,7 @@ def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any],
                       if fanout is not None and fanout.parent_rows is not None else {})
     if fanout is not None and fanout.child_rows is not None and fanout.child_rows > 2_000_000:
         errors.append(f"The requested {fanout.child_rows:,} {fanout.child} exceeds the 2,000,000-row table limit.")
-    proposed_nulls = {(item.table, item.column): item.probability for item in plan.null_rates}
-    matched_nulls: set[tuple[str, str]] = set()
+    matched_nulls: set[tuple[str, str]] = set(explicit.null_rates)
     for table in inspection["tables"]:
         name = table["name"]
         counts = _mentioned_rows(goal, name, fanout.span if fanout is not None else None)
