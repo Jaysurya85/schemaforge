@@ -7,7 +7,9 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from schemaforge_api.ai_plan import AIPlan, PlanApplicationError, apply_ai_plan, check_explicit_requests
+from schemaforge_api.ai_plan import (AIPlan, PlanApplicationError, apply_ai_plan,
+                                      check_explicit_requests, derive_fanout_request,
+                                      explain_unsupported_fanout)
 from schemaforge_api.models import ColumnSettings, RunRequest, TableSettings
 from schemaforge_api.runner import compose_generation_config, render_generation_config
 
@@ -126,6 +128,46 @@ def test_vague_size_cannot_create_an_unrequested_row_count() -> None:
     with pytest.raises(PlanApplicationError, match="invented a row count"):
         check_explicit_requests("Make a medium-sized customer dataset.",
                                 plan_with(table_rows=[{"table": "customers", "rows": 50}]), INSPECTION)
+
+
+def test_parent_count_and_per_parent_request_imply_child_rows() -> None:
+    goal = "i want to heavy test on this mkae around 3000 rows and every customer should have 2 orders"
+    fanout = derive_fanout_request(goal, INSPECTION)
+    assert fanout is not None
+    assert (fanout.parent_rows, fanout.child_rows, fanout.inferred_parent) == (3000, 6000, True)
+    wrong = plan_with(table_rows=[{"table": "customers", "rows": 3000},
+                                  {"table": "orders", "rows": 3000}])
+    with pytest.raises(PlanApplicationError, match="requested 6000 rows for orders"):
+        check_explicit_requests(goal, wrong, INSPECTION)
+
+    correct = plan_with(table_rows=[{"table": "customers", "rows": 3000},
+                                    {"table": "orders", "rows": 6000}],
+                        unapplied=[{"request": "every customer should have 2 orders",
+                                    "reason": "conflicting_request",
+                                    "explanation": "6000 exceeds a supposed 3000-row limit."}])
+    check_explicit_requests(goal, correct, INSPECTION)
+    explained = explain_unsupported_fanout(goal, correct, INSPECTION)
+    assert explained.unapplied[0].reason == "unsupported_relationship"
+    assert "average" in explained.unapplied[0].explanation
+    assert "limit" not in explained.unapplied[0].explanation
+    assert explained.assumptions[0] == "Interpreted the row count as 3,000 customers."
+
+
+def test_explicit_parent_count_implies_child_count_without_inference_assumption() -> None:
+    goal = "Generate 3,000 customers. Every customer should have 2 orders."
+    fanout = derive_fanout_request(goal, INSPECTION)
+    assert fanout is not None
+    assert (fanout.parent_rows, fanout.child_rows, fanout.inferred_parent) == (3000, 6000, False)
+    plan = plan_with(table_rows=[{"table": "customers", "rows": 3000},
+                                 {"table": "orders", "rows": 6000}])
+    check_explicit_requests(goal, plan, INSPECTION)
+    assert explain_unsupported_fanout(goal, plan, INSPECTION).assumptions == []
+
+
+def test_per_parent_wording_also_derives_child_count() -> None:
+    request = derive_fanout_request("Generate 3000 customers with 2 orders per customer.", INSPECTION)
+    assert request is not None
+    assert (request.parent_rows, request.child_rows) == (3000, 6000)
 
 
 def test_plan_must_not_invent_ranges_values_or_null_rates() -> None:

@@ -10,13 +10,14 @@ and row generation.
 
 - The model proposes settings. It never writes SchemaForge YAML, SQL schema, or
   generated rows. Python builds the YAML from the CLI's base config.
-- A proposal does not change the current controls or start generation. The user
-  reviews the proposed changes, unapplied requests, and read-only YAML first.
+- A validated proposal fills the Shape the data controls but does not start
+  generation. The user reviews the settings, unapplied requests, and read-only
+  YAML, and can undo the AI changes.
 - Only settings explicitly supported below may enter executable configuration.
   A requested distribution or cross-column business relationship must appear
   under `unapplied`, even if the model can describe it convincingly.
-- Manual row counts and rules remain available. If a proposal would replace a
-  manual setting, the review must show the old and proposed values.
+- Manual row counts and rules remain available. The user can edit proposed
+  settings; the YAML is regenerated and validated before generation is enabled.
 - AI planning is optional and sends the pasted schema and testing request to a
   hosted provider. Local generation without AI remains available. The API key
   belongs on the server, never in browser code or the repository.

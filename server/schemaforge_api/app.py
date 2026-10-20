@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from .ai_plan import PlanApplicationError, apply_ai_plan, check_explicit_requests
+from .ai_plan import PlanApplicationError, apply_ai_plan, check_explicit_requests, explain_unsupported_fanout
 from .model_provider import NaviGatorProvider, OpenAIProvider, PlanProvider, ProviderError
 from .models import RunRequest, SchemaRequest
 from .runner import (EngineError, binary_path, call_engine, download_path, generate,
@@ -127,6 +127,7 @@ def create_ai_plan(body: PlanningRequest) -> dict[str, object]:
                 if attempt:
                     raise
                 feedback = str(error)
+        plan = explain_unsupported_fanout(body.testing_goal, plan, inspection)
         applied = apply_ai_plan(body.request, plan, inspection)
         draft = prepare_config(applied)
         return {"plan": plan.model_dump(), "draft": draft}

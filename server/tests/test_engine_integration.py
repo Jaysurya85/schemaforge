@@ -90,6 +90,44 @@ def test_ai_endpoint_retries_a_plan_that_changes_an_explicit_count(
     assert "requested 4 rows" in provider.feedback[1]
 
 
+def test_ai_endpoint_corrects_derived_order_count_and_explains_fanout_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+
+    class FanoutRetryProvider:
+        def __init__(self):
+            self.feedback = []
+
+        def propose(self, **kwargs):
+            self.feedback.append(kwargs["feedback"])
+            order_rows = 3000 if len(self.feedback) == 1 else 6000
+            return AIPlan.model_validate(base_plan(
+                table_rows=[{"table": "customers", "rows": 3000},
+                            {"table": "orders", "rows": order_rows}],
+                unapplied=[{"request": "every customer should have 2 orders",
+                            "reason": "conflicting_request",
+                            "explanation": "6000 orders exceeds the current 3000-row limit."}],
+            ))
+
+    provider = FanoutRetryProvider()
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: provider)
+    body = {"request": {"sql": "CREATE TABLE customers (id INTEGER PRIMARY KEY); "
+                               "CREATE TABLE orders (id INTEGER PRIMARY KEY, "
+                               "customer_id INTEGER NOT NULL REFERENCES customers(id));",
+                        "validate_with": "none"},
+            "testing_goal": "Make around 3000 rows and every customer should have 2 orders"}
+    response = client.post("/api/ai/plan", json=body)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["draft"]["request"]["tables"]["customers"]["rows"] == 3000
+    assert data["draft"]["request"]["tables"]["orders"]["rows"] == 6000
+    assert data["plan"]["unapplied"][0]["reason"] == "unsupported_relationship"
+    assert "average" in data["plan"]["unapplied"][0]["explanation"]
+    assert "limit" not in data["plan"]["unapplied"][0]["explanation"]
+    assert "requested 6000 rows for orders" in provider.feedback[1]
+
+
 def test_ambiguous_ai_request_is_visible_but_does_not_change_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

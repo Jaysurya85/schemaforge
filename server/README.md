@@ -53,6 +53,11 @@ the request, and the C++ validation-only preflight all run before a draft is
 offered. If the proposal contradicts those explicit details, the server asks
 the model to correct it once; a second contradiction returns a validation
 error instead of a misleading draft.
+For a request such as "around 3,000 rows and every customer should have 2
+orders," the planner treats 3,000 as the customer count and checks the implied
+6,000 order rows. This is an assumption shown in the review. The engine may
+generate those row counts, but it still samples valid customer IDs for orders;
+exactly two orders per customer is reported as an unsupported relationship.
 The provider adapter is replaceable for offline tests. The current engine can
 apply constraints, not probability distributions; those requests appear in
 `unapplied` instead of being represented as generated behavior.

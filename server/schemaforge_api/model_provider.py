@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-from .ai_plan import AIPlan
+from .ai_plan import AIPlan, derive_fanout_request
 
 
 class ProviderError(Exception):
@@ -51,6 +51,9 @@ SYSTEM_PROMPT = (
     "value lists, and null rates. Do not claim distributions or relationship patterns are "
     "implemented; put explicitly requested unsupported behavior in unapplied. "
     "Copy every explicit numeric row count, numeric range, and null percentage exactly. "
+    "Current row settings are editable defaults, not maximum limits. When a parent count and "
+    "children-per-parent are given, calculate the child row count, but mark the exact "
+    "per-parent assignment as an unsupported relationship. Do not call a current row count a limit. "
     "Do not add row counts, ranges, value lists, or null rates that the user did not request. "
     "Never guess a row count from words like small or medium. "
     "A list of allowed categories does not imply a percentage distribution; do not mark an "
@@ -63,11 +66,19 @@ SYSTEM_PROMPT = (
 
 def planning_messages(sql: str, request: str, inspection: dict[str, Any],
                       current: dict[str, Any], feedback: str | None = None) -> list[dict[str, str]]:
+    payload = {"schema": sql, "inspection": inspection, "current_settings": current,
+               "testing_request": request}
+    fanout = derive_fanout_request(request, inspection)
+    if fanout is not None:
+        payload["derived_guidance"] = {
+            "parent_table": fanout.parent, "parent_rows": fanout.parent_rows,
+            "child_table": fanout.child, "child_rows": fanout.child_rows,
+            "exact_per_parent": fanout.per_parent,
+            "note": "Row counts may be proposed; exact per-parent assignment is unsupported.",
+        }
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps({
-            "schema": sql, "inspection": inspection, "current_settings": current,
-            "testing_request": request}, ensure_ascii=False)},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
     if feedback:
         messages.append({"role": "user", "content": (

@@ -2,6 +2,7 @@
 
 import math
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
@@ -110,6 +111,100 @@ class PlanApplicationError(ValueError):
     """A well-formed proposal cannot be applied to this inspected schema."""
 
 
+@dataclass(frozen=True)
+class FanoutRequest:
+    parent: str
+    child: str
+    per_parent: int
+    phrase: str
+    parent_rows: int | None
+    child_rows: int | None
+    inferred_parent: bool
+    span: tuple[int, int]
+
+
+def _mentioned_rows(goal: str, table_name: str, ignored_span: tuple[int, int] | None = None) -> set[int]:
+    quoted = re.escape(table_name)
+    patterns = (
+        rf"\b(\d[\d,]*)\s+(?:rows?\s+(?:of|for|in)\s+)?{quoted}\b",
+        rf"\b{quoted}\s+(?:with|for|of|at)\s+(\d[\d,]*)\s+rows?\b",
+    )
+    return {int(match.group(1).replace(",", "")) for pattern in patterns
+            for match in re.finditer(pattern, goal, re.IGNORECASE)
+            if ignored_span is None or not (ignored_span[0] <= match.start() and match.end() <= ignored_span[1])}
+
+
+def _singular_table_name(name: str) -> str:
+    if name.endswith("ies"):
+        return name[:-3] + "y"
+    if name.endswith("s"):
+        return name[:-1]
+    return name
+
+
+def derive_fanout_request(goal: str, inspection: dict[str, Any]) -> FanoutRequest | None:
+    """Recognize simple 'each parent has N children' requests for count checks."""
+    names = [table["name"] for table in inspection.get("tables", [])]
+    words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+    for parent in names:
+        singular = _singular_table_name(parent)
+        for child in names:
+            if child == parent:
+                continue
+            count = r"(?P<count>\d[\d,]*|one|two|three|four|five)"
+            patterns = (
+                rf"\b(?:each|every)\s+{re.escape(singular)}\s+"
+                rf"(?:should\s+)?(?:have|has|gets?|with)\s+{count}\s+{re.escape(child)}\b",
+                rf"\b{count}\s+{re.escape(child)}\s+per\s+{re.escape(singular)}\b",
+            )
+            match = next((found for pattern in patterns
+                          if (found := re.search(pattern, goal, re.IGNORECASE)) is not None), None)
+            if match is None:
+                continue
+            raw_count = match.group("count").lower()
+            per_parent = words[raw_count] if raw_count in words else int(raw_count.replace(",", ""))
+            if per_parent < 1:
+                continue
+            parent_mentions = _mentioned_rows(goal, parent, match.span())
+            parent_rows = next(iter(parent_mentions)) if len(parent_mentions) == 1 else None
+            inferred = False
+            if parent_rows is None and not any(_mentioned_rows(goal, name, match.span()) for name in names):
+                # An unlabeled count next to this relationship describes the parent
+                # population. Explicit "total rows" remains ambiguous and is not inferred.
+                bare = {int(item.group(1).replace(",", "")) for item in
+                        re.finditer(r"\b(\d[\d,]*)\s+rows?\b", goal, re.IGNORECASE)}
+                if len(bare) == 1 and not re.search(r"\b(?:total|combined|overall)\b", goal, re.IGNORECASE):
+                    parent_rows = next(iter(bare))
+                    inferred = True
+            child_rows = parent_rows * per_parent if parent_rows is not None else None
+            return FanoutRequest(parent, child, per_parent, match.group(), parent_rows, child_rows,
+                                 inferred, match.span())
+    return None
+
+
+def explain_unsupported_fanout(goal: str, plan: AIPlan, inspection: dict[str, Any]) -> AIPlan:
+    """Replace model-authored relationship excuses with the engine's actual limit."""
+    request = derive_fanout_request(goal, inspection)
+    if request is None:
+        return plan
+    singular = _singular_table_name(request.parent)
+    matching = [item for item in plan.unapplied if
+                re.search(rf"\b{re.escape(singular)}\b", item.request, re.IGNORECASE) and
+                re.search(rf"\b{re.escape(request.child)}\b", item.request, re.IGNORECASE)]
+    remaining = [item for item in plan.unapplied if item not in matching]
+    explanation = (f"SchemaForge samples valid {singular} IDs for {request.child} and cannot guarantee "
+                   f"exactly {request.per_parent} {request.child} for every {singular}.")
+    if request.child_rows is not None:
+        explanation += (f" {request.child_rows:,} {request.child} rows gives an average of "
+                        f"{request.per_parent} per {singular}, not an exact count.")
+    remaining.append(UnappliedRequest(request=request.phrase, reason="unsupported_relationship",
+                                      explanation=explanation))
+    assumptions = list(plan.assumptions)
+    if request.inferred_parent:
+        assumptions.insert(0, f"Interpreted the row count as {request.parent_rows:,} {request.parent}.")
+    return plan.model_copy(update={"unapplied": remaining, "assumptions": assumptions})
+
+
 def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any]) -> None:
     """Fail closed when a proposal contradicts simple numeric user instructions."""
     errors: list[str] = []
@@ -134,20 +229,21 @@ def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any])
             errors.append(f"AI plan did not mark the requested {percentage} distribution as unsupported.")
 
     proposed_rows = {item.table: item.rows for item in plan.table_rows}
+    fanout = derive_fanout_request(goal, inspection)
+    derived_counts = ({fanout.parent: fanout.parent_rows, fanout.child: fanout.child_rows}
+                      if fanout is not None and fanout.parent_rows is not None else {})
+    if fanout is not None and fanout.child_rows is not None and fanout.child_rows > 2_000_000:
+        errors.append(f"The requested {fanout.child_rows:,} {fanout.child} exceeds the 2,000,000-row table limit.")
     proposed_nulls = {(item.table, item.column): item.probability for item in plan.null_rates}
     matched_nulls: set[tuple[str, str]] = set()
     for table in inspection["tables"]:
         name = table["name"]
-        quoted = re.escape(name)
-        patterns = (
-            rf"\b(\d[\d,]*)\s+(?:rows?\s+(?:of|for|in)\s+)?{quoted}\b",
-            rf"\b{quoted}\s+(?:with|for|of|at)\s+(\d[\d,]*)\s+rows?\b",
-        )
-        counts = {int(match.group(1).replace(",", "")) for pattern in patterns
-                  for match in re.finditer(pattern, goal, re.IGNORECASE)}
+        counts = _mentioned_rows(goal, name, fanout.span if fanout is not None else None)
         if len(counts) > 1:
             errors.append(f"Conflicting row counts requested for {name}.")
-        expected = next(iter(counts), None)
+        expected = derived_counts.get(name, next(iter(counts), None))
+        if counts and name in derived_counts and next(iter(counts)) != derived_counts[name]:
+            errors.append(f"Requested {name} row count conflicts with the per-parent relationship.")
         proposed = proposed_rows.get(name)
         if expected is not None and proposed != expected:
             errors.append(f"AI plan did not preserve the requested {expected} rows for {name}.")

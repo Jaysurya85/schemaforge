@@ -4,7 +4,7 @@ import json
 import pytest
 
 from schemaforge_api.app import planning_provider
-from schemaforge_api.model_provider import NaviGatorProvider, OpenAIProvider, ProviderError
+from schemaforge_api.model_provider import NaviGatorProvider, OpenAIProvider, ProviderError, planning_messages
 
 
 EMPTY_PLAN = {"version": 1, "table_rows": [], "number_ranges": [], "value_lists": [],
@@ -88,3 +88,15 @@ def test_provider_selection_prefers_configured_navigator_key(monkeypatch: pytest
     assert isinstance(planning_provider(), NaviGatorProvider)
     monkeypatch.setenv("SCHEMAFORGE_AI_PROVIDER", "openai")
     assert isinstance(planning_provider(), OpenAIProvider)
+
+
+def test_planning_prompt_includes_derived_parent_and_child_counts() -> None:
+    messages = planning_messages(
+        "CREATE TABLE customers (id INT); CREATE TABLE orders (id INT, customer_id INT);",
+        "Make around 3000 rows and every customer should have 2 orders",
+        {"tables": [{"name": "customers"}, {"name": "orders"}]}, {},
+    )
+    guidance = json.loads(messages[1]["content"])["derived_guidance"]
+    assert guidance["parent_rows"] == 3000
+    assert guidance["child_rows"] == 6000
+    assert "not maximum limits" in messages[0]["content"]
