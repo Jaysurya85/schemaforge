@@ -274,31 +274,33 @@ also supported. Keep either key out of the browser and Git. Manual generation
 works without a key. See [server/README.md](server/README.md) for provider
 selection and setup details.
 
-After building the CLI, start the API from the repository root:
+From the repository root, run these commands once to install dependencies and
+build the engine and website:
 
 ```bash
-python3 -m venv server/.venv
-server/.venv/bin/pip install -e 'server[test]'
-server/.venv/bin/uvicorn schemaforge_api.app:app --app-dir server --host 127.0.0.1 --port 8000
+make setup
+make build
 ```
 
-In a second terminal, start the frontend:
+Then start the complete website and API with one command:
 
 ```bash
-cd web
-pnpm install --frozen-lockfile
-pnpm dev
+make run
 ```
 
-Open `http://127.0.0.1:5173`. Vite forwards `/api` calls to the FastAPI server.
-For a single-server demo, run `pnpm build` in `web/` first, then open
-`http://127.0.0.1:8000`; FastAPI serves the built frontend if `web/dist` exists.
-Set `SCHEMAFORGE_BINARY` when the CLI is outside `build/schemaforge`, and see
-[server/README.md](server/README.md) for the HTTP contract and a `curl` example.
+Open `http://127.0.0.1:8000`. Press Ctrl+C to stop. Run `make run` again next
+time. After frontend edits, run `make web`; after C++ edits, run `make native`.
+Run `make help` to see all targets. If the CLI is outside `build/schemaforge`,
+use `make run SCHEMAFORGE_BINARY=/absolute/path/to/schemaforge`. To use AI
+planning without exporting a key in every terminal, create the Git-ignored
+`server/.env.local` with `NAVIGATOR_TOOLKIT_API_KEY='your-key'` on one line.
+Restrict it to your account with `chmod 600 server/.env.local`. The server
+loads this file when you run `make run`; it does not send the key to the browser.
+See [server/README.md](server/README.md) for the HTTP contract and a `curl`
+example.
 
-On macOS, if this checkout still contains parser objects or `libsqlparser.so`
-from a Linux build, run `make -C external/sql-parser clean` before building the
-native CLI. A fresh clone does not need that extra step.
+On macOS, `make native` cleans parser objects from a Linux build before
+compiling, if it finds a Linux parser library in the checkout.
 
 ## Testing
 

@@ -84,24 +84,27 @@ curl -s -X POST http://127.0.0.1:8000/api/schemas/inspect \
 
 ## Run locally
 
-Build the C++ CLI for the current machine first. From the repository root:
+From the repository root:
 
 ```sh
-python3 -m venv server/.venv
-server/.venv/bin/pip install -e 'server[test]'
-server/.venv/bin/uvicorn schemaforge_api.app:app --app-dir server --host 127.0.0.1 --port 8000
+make setup
+make build
+make run
 ```
 
-Set `SCHEMAFORGE_BINARY` if the executable is elsewhere. Set
+The first two commands are one-time setup; use `make run` for later starts.
+Open `http://127.0.0.1:8000` and press Ctrl+C to stop. For AI planning, set
+`NAVIGATOR_TOOLKIT_API_KEY` in the terminal, or put it in the Git-ignored
+`server/.env.local` as `NAVIGATOR_TOOLKIT_API_KEY='your-key'` and run
+`chmod 600 server/.env.local`. If the CLI is elsewhere, use
+`make run SCHEMAFORGE_BINARY=/absolute/path/to/schemaforge`. Set
 `SCHEMAFORGE_RUN_DIR` to choose where run artifacts are retained. The default
 is the operating system's temporary directory. The local API is available at
 `http://127.0.0.1:8000/api/health`; interactive API documentation is at
 `http://127.0.0.1:8000/docs`.
 
-For a single-server website, run `pnpm install --frozen-lockfile` and
-`pnpm build` in `web/` before starting the API. The API serves `web/dist` at
-`http://127.0.0.1:8000` when the build exists. During frontend development,
-`pnpm dev` serves the site at `http://127.0.0.1:5173` and proxies API calls.
+`make build` builds the CLI and frontend. After frontend edits, `make web`
+refreshes the served website. After C++ edits, `make native` rebuilds the CLI.
 
 Run the server tests with `server/.venv/bin/pytest server/tests`. Set
 `SCHEMAFORGE_BINARY` to a native executable to include the real-engine checks.

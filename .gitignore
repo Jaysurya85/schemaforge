@@ -17,6 +17,7 @@ examples/final_demo/postgres-copy-benchmark.yaml
 .vscode/
 .idea/
 server/.venv/
+server/.env.local
 server/.pytest_cache/
 server/**/__pycache__/
 server/*.egg-info/
