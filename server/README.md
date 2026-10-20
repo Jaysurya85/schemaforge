@@ -28,11 +28,12 @@ paths from a request.
 It returns a `plan` with proposed row counts and column rules, assumptions,
 and `unapplied` requests, plus a `draft` containing an ID, the applied request,
 and its exact YAML. The server checks the schema, names, types, and generation
-capacity before returning it. The endpoint does not generate data. The browser
-shows the proposed settings and YAML, then applies the settings to the controls
-only when the user chooses **Apply plan to controls**. Generating an accepted
-draft uses that saved YAML. Editing a control makes the browser discard its
-acceptance of that draft.
+capacity before returning it. The endpoint does not generate data. A successful
+plan fills the controls in **Shape the data** and shows the validated YAML there
+for review. The user can edit those controls or undo the AI changes. After an
+edit, the browser calls `/api/configs/preview` to validate and display the new
+YAML; generation is disabled until the preview matches the visible controls.
+Generating from the reviewed draft uses that exact saved YAML.
 
 AI planning sends the SQL schema, current settings, and testing goal to the
 configured provider. To use UF NaviGator AI Toolkit, create a personal key with

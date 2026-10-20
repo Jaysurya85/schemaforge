@@ -105,6 +105,8 @@ export const api = {
     request<RunResult>('/api/runs', { method: 'POST', body: JSON.stringify(input) }),
   plan: (input: RunInput, testingGoal: string) =>
     request<AIReview>('/api/ai/plan', { method: 'POST', body: JSON.stringify({ request: input, testing_goal: testingGoal }) }),
+  previewConfig: (input: RunInput) =>
+    request<ConfigDraft>('/api/configs/preview', { method: 'POST', body: JSON.stringify(input) }),
   generateDraft: (draftId: string) =>
     request<RunResult>(`/api/configs/${draftId}/generate`, { method: 'POST' }),
   downloadUrl: (runId: string) => `/api/runs/${runId}/download`,
