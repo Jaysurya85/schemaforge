@@ -128,6 +128,35 @@ def test_ai_endpoint_corrects_derived_order_count_and_explains_fanout_limit(
     assert "requested 6000 rows for orders" in provider.feedback[1]
 
 
+def test_ai_endpoint_keeps_vague_fanout_plan_and_ignores_model_zero_null_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    plan = base_plan(null_rates=[
+        {"table": "customers", "column": "name", "probability": 0},
+        {"table": "orders", "column": "customer_id", "probability": 0},
+        {"table": "orders", "column": "total", "probability": 0},
+    ])
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(plan))
+    body = {"request": {"sql": "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL); "
+                               "CREATE TABLE orders (id INTEGER PRIMARY KEY, "
+                               "customer_id INTEGER NOT NULL REFERENCES customers(id), "
+                               "total DECIMAL NOT NULL);",
+                        "tables": {"customers": {"rows": 10}, "orders": {"rows": 10}},
+                        "validate_with": "none"},
+            "testing_goal": "Make many rows and every customer should have 2 orders"}
+    response = client.post("/api/ai/plan", json=body)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["plan"]["null_rates"] == []
+    assert data["plan"]["table_rows"] == [
+        {"table": "customers", "rows": 10}, {"table": "orders", "rows": 20},
+    ]
+    assert data["plan"]["unapplied"][0]["reason"] == "unsupported_relationship"
+    assert data["draft"]["request"]["tables"]["orders"]["rows"] == 20
+    assert "null_probability" not in data["draft"]["yaml"]
+
+
 def test_ambiguous_ai_request_is_visible_but_does_not_change_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

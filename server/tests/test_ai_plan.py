@@ -9,7 +9,8 @@ from pydantic import ValidationError
 
 from schemaforge_api.ai_plan import (AIPlan, PlanApplicationError, apply_ai_plan,
                                       check_explicit_requests, derive_fanout_request,
-                                      explain_unsupported_fanout)
+                                      drop_unrequested_zero_null_rates, explain_unsupported_fanout,
+                                      normalize_fanout_plan)
 from schemaforge_api.models import ColumnSettings, RunRequest, TableSettings
 from schemaforge_api.runner import compose_generation_config, render_generation_config
 
@@ -168,6 +169,27 @@ def test_per_parent_wording_also_derives_child_count() -> None:
     request = derive_fanout_request("Generate 3000 customers with 2 orders per customer.", INSPECTION)
     assert request is not None
     assert (request.parent_rows, request.child_rows) == (3000, 6000)
+
+
+def test_vague_fanout_uses_current_parent_count_for_reviewable_plan() -> None:
+    goal = "Make many rows and every customer should have 2 orders"
+    current = {"tables": {"customers": {"rows": 10}, "orders": {"rows": 10}}}
+    plan = normalize_fanout_plan(goal, plan_with(), INSPECTION, current)
+    assert {(item.table, item.rows) for item in plan.table_rows} == {
+        ("customers", 10), ("orders", 20),
+    }
+    check_explicit_requests(goal, plan, INSPECTION, current)
+    explained = explain_unsupported_fanout(goal, plan, INSPECTION, current)
+    assert explained.unapplied[0].reason == "unsupported_relationship"
+    assert "current 10 customers" in explained.assumptions[0]
+
+
+def test_unrequested_zero_null_defaults_are_removed() -> None:
+    plan = plan_with(null_rates=[{"table": "orders", "column": "customer_id", "probability": 0}])
+    cleaned = drop_unrequested_zero_null_rates("Every customer should have 2 orders", plan)
+    assert cleaned.null_rates == []
+    assert plan.null_rates != []
+    assert drop_unrequested_zero_null_rates("Make 0% of customer_id null", plan).null_rates == plan.null_rates
 
 
 def test_plan_must_not_invent_ranges_values_or_null_rates() -> None:

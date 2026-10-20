@@ -121,6 +121,7 @@ class FanoutRequest:
     child_rows: int | None
     inferred_parent: bool
     span: tuple[int, int]
+    from_current: bool = False
 
 
 def _mentioned_rows(goal: str, table_name: str, ignored_span: tuple[int, int] | None = None) -> set[int]:
@@ -142,7 +143,8 @@ def _singular_table_name(name: str) -> str:
     return name
 
 
-def derive_fanout_request(goal: str, inspection: dict[str, Any]) -> FanoutRequest | None:
+def derive_fanout_request(goal: str, inspection: dict[str, Any],
+                          current: dict[str, Any] | None = None) -> FanoutRequest | None:
     """Recognize simple 'each parent has N children' requests for count checks."""
     names = [table["name"] for table in inspection.get("tables", [])]
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
@@ -176,15 +178,43 @@ def derive_fanout_request(goal: str, inspection: dict[str, Any]) -> FanoutReques
                 if len(bare) == 1 and not re.search(r"\b(?:total|combined|overall)\b", goal, re.IGNORECASE):
                     parent_rows = next(iter(bare))
                     inferred = True
+            from_current = False
+            if parent_rows is None and current is not None:
+                settings = current.get("tables", {}).get(parent, {})
+                inspected = next(table for table in inspection["tables"] if table["name"] == parent)
+                parent_rows = settings.get("rows", inspected["rows"])
+                from_current = True
             child_rows = parent_rows * per_parent if parent_rows is not None else None
             return FanoutRequest(parent, child, per_parent, match.group(), parent_rows, child_rows,
-                                 inferred, match.span())
+                                 inferred, match.span(), from_current)
     return None
 
 
-def explain_unsupported_fanout(goal: str, plan: AIPlan, inspection: dict[str, Any]) -> AIPlan:
+def normalize_fanout_plan(goal: str, plan: AIPlan, inspection: dict[str, Any],
+                          current: dict[str, Any]) -> AIPlan:
+    """Use the editable current count when a per-parent request gives no size."""
+    fanout = derive_fanout_request(goal, inspection, current)
+    if (fanout is None or not fanout.from_current or fanout.child_rows is None
+            or fanout.child_rows > 2_000_000):
+        return plan
+    rows = [item for item in plan.table_rows if item.table not in {fanout.parent, fanout.child}]
+    rows.extend([TableRows(table=fanout.parent, rows=fanout.parent_rows),
+                 TableRows(table=fanout.child, rows=fanout.child_rows)])
+    return plan.model_copy(update={"table_rows": rows})
+
+
+def drop_unrequested_zero_null_rates(goal: str, plan: AIPlan) -> AIPlan:
+    """A model's zero-rate defaults add no constraint and can invalidate required columns."""
+    if re.search(r"\bnull\b", goal, re.IGNORECASE):
+        return plan
+    rates = [item for item in plan.null_rates if item.probability != 0]
+    return plan.model_copy(update={"null_rates": rates})
+
+
+def explain_unsupported_fanout(goal: str, plan: AIPlan, inspection: dict[str, Any],
+                               current: dict[str, Any] | None = None) -> AIPlan:
     """Replace model-authored relationship excuses with the engine's actual limit."""
-    request = derive_fanout_request(goal, inspection)
+    request = derive_fanout_request(goal, inspection, current)
     if request is None:
         return plan
     singular = _singular_table_name(request.parent)
@@ -202,10 +232,13 @@ def explain_unsupported_fanout(goal: str, plan: AIPlan, inspection: dict[str, An
     assumptions = list(plan.assumptions)
     if request.inferred_parent:
         assumptions.insert(0, f"Interpreted the row count as {request.parent_rows:,} {request.parent}.")
+    if request.from_current:
+        assumptions.insert(0, f"Used the current {request.parent_rows:,} {request.parent} setting because no count was specified.")
     return plan.model_copy(update={"unapplied": remaining, "assumptions": assumptions})
 
 
-def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any]) -> None:
+def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any],
+                            current: dict[str, Any] | None = None) -> None:
     """Fail closed when a proposal contradicts simple numeric user instructions."""
     errors: list[str] = []
     for item in plan.number_ranges:
@@ -229,7 +262,7 @@ def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any])
             errors.append(f"AI plan did not mark the requested {percentage} distribution as unsupported.")
 
     proposed_rows = {item.table: item.rows for item in plan.table_rows}
-    fanout = derive_fanout_request(goal, inspection)
+    fanout = derive_fanout_request(goal, inspection, current)
     derived_counts = ({fanout.parent: fanout.parent_rows, fanout.child: fanout.child_rows}
                       if fanout is not None and fanout.parent_rows is not None else {})
     if fanout is not None and fanout.child_rows is not None and fanout.child_rows > 2_000_000:

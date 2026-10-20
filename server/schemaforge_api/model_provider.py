@@ -54,8 +54,10 @@ SYSTEM_PROMPT = (
     "Current row settings are editable defaults, not maximum limits. When a parent count and "
     "children-per-parent are given, calculate the child row count, but mark the exact "
     "per-parent assignment as an unsupported relationship. Do not call a current row count a limit. "
-    "Do not add row counts, ranges, value lists, or null rates that the user did not request. "
-    "Never guess a row count from words like small or medium. "
+    "Do not add ranges, value lists, or null rates that the user did not request. "
+    "For vague size words, preserve current row settings. If a children-per-parent count is "
+    "given without a parent count, use the current parent count and derive the child count; "
+    "state this assumption. Never add null_probability: 0 as a default. "
     "A list of allowed categories does not imply a percentage distribution; do not mark an "
     "unstated distribution as unapplied. Do not turn requested percentages into literal values. "
     "Apply supported parts of a request even if another part is unsupported. "
@@ -68,7 +70,7 @@ def planning_messages(sql: str, request: str, inspection: dict[str, Any],
                       current: dict[str, Any], feedback: str | None = None) -> list[dict[str, str]]:
     payload = {"schema": sql, "inspection": inspection, "current_settings": current,
                "testing_request": request}
-    fanout = derive_fanout_request(request, inspection)
+    fanout = derive_fanout_request(request, inspection, current)
     if fanout is not None:
         payload["derived_guidance"] = {
             "parent_table": fanout.parent, "parent_rows": fanout.parent_rows,
