@@ -280,7 +280,8 @@ def check_explicit_requests(goal: str, plan: AIPlan, inspection: dict[str, Any],
         proposed = proposed_rows.get(name)
         if expected is not None and proposed != expected:
             errors.append(f"AI plan did not preserve the requested {expected} rows for {name}.")
-        if expected is None and proposed is not None:
+        current_rows = (current or {}).get("tables", {}).get(name, {}).get("rows", table["rows"])
+        if expected is None and proposed is not None and proposed != current_rows:
             errors.append(f"AI plan invented a row count for {name}.")
 
         for column in table["column_types"]:

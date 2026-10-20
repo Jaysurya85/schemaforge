@@ -131,6 +131,17 @@ def test_vague_size_cannot_create_an_unrequested_row_count() -> None:
                                 plan_with(table_rows=[{"table": "customers", "rows": 50}]), INSPECTION)
 
 
+def test_model_may_repeat_current_row_settings_without_inventing_counts() -> None:
+    goal = "Use only pending and paid for orders.status."
+    current = {"tables": {"customers": {"rows": 100}, "orders": {"rows": 100}}}
+    plan = plan_with(table_rows=[{"table": "customers", "rows": 100},
+                                 {"table": "orders", "rows": 100}])
+    check_explicit_requests(goal, plan, INSPECTION, current)
+    with pytest.raises(PlanApplicationError, match="invented a row count for orders"):
+        check_explicit_requests(goal, plan_with(table_rows=[{"table": "orders", "rows": 200}]),
+                                INSPECTION, current)
+
+
 def test_parent_count_and_per_parent_request_imply_child_rows() -> None:
     goal = "i want to heavy test on this mkae around 3000 rows and every customer should have 2 orders"
     fanout = derive_fanout_request(goal, INSPECTION)

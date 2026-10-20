@@ -157,6 +157,28 @@ def test_ai_endpoint_keeps_vague_fanout_plan_and_ignores_model_zero_null_default
     assert "null_probability" not in data["draft"]["yaml"]
 
 
+def test_ai_endpoint_accepts_repeated_current_counts_for_value_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SCHEMAFORGE_RUN_DIR", str(tmp_path / "runs"))
+    schema = Path("examples/final_demo/schema.sql").read_text()
+    table_names = ["users", "products", "orders", "order_items", "payments"]
+    plan = base_plan(
+        table_rows=[{"table": name, "rows": 100} for name in table_names],
+        value_lists=[{"table": "orders", "column": "status", "values": ["pending", "paid"]}],
+    )
+    monkeypatch.setattr("schemaforge_api.app.planning_provider", lambda: FakeProvider(plan))
+    response = client.post("/api/ai/plan", json={
+        "request": {"sql": schema, "validate_with": "none",
+                    "tables": {name: {"rows": 100} for name in table_names}},
+        "testing_goal": "Use only pending and paid for orders.status.",
+    })
+    assert response.status_code == 200, response.text
+    draft = response.json()["draft"]
+    assert all(draft["request"]["tables"][name]["rows"] == 100 for name in table_names)
+    assert draft["request"]["tables"]["orders"]["columns"]["status"]["values"] == ["pending", "paid"]
+
+
 def test_ambiguous_ai_request_is_visible_but_does_not_change_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
