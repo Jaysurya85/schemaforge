@@ -1,8 +1,17 @@
 # SchemaForge
 
-A modular C++ relational test-data generation engine: parse SQL CREATE TABLE schemas, model relational constraints, generate deterministic constraint-valid datasets, stream SQL/CSV/PostgreSQL COPY output, and validate generated data with SQLite or PostgreSQL.
+A C++ relational test-data generator with a local web workspace and HTTP API. SchemaForge reads SQL `CREATE TABLE` definitions, checks supported constraints, generates repeatable data, streams SQL/CSV/PostgreSQL COPY output, and can validate the result with SQLite or PostgreSQL.
 
-SchemaForge is an educational systems project for practicing C++ beyond syntax: parser integration, internal domain modeling, constraint validation, graph-based dependency ordering, deterministic generation, streaming writers, database-backed correctness checks, and benchmark reporting.
+Use the engine directly from the command line or through the React website and FastAPI server. An optional, early-stage AI planner can propose row counts and column rules from a plain-English test goal. The user reviews the resulting controls and YAML before the C++ engine generates anything.
+
+SchemaForge is an educational systems project exploring parser integration, domain modeling, constraint validation, dependency ordering, deterministic generation, streaming output, database-backed checks, and benchmark reporting.
+
+| Area | Status |
+|---|---|
+| C++ engine, CLI, output writers, and database validation | Built |
+| Local website and FastAPI interface | Built |
+| AI-assisted configuration planning and review | Prototype; planning accuracy has not been measured |
+| Exact per-parent counts, distributions, and test-goal verification | Proposed |
 
 ## Table of contents
 -   [Architecture](#architecture)
@@ -11,6 +20,7 @@ SchemaForge is an educational systems project for practicing C++ beyond syntax: 
 -   [Project structure](#project-structure)
 -   [Build](#build)
 -   [Web workspace and HTTP API](#web-workspace-and-http-api)
+-   [AI planning and review](#ai-planning-and-review)
 -   [Testing](#testing)
 -   [Quick demo](#quick-demo)
 -   [Configuration](#configuration)
@@ -27,9 +37,16 @@ SchemaForge is an educational systems project for practicing C++ beyond syntax: 
 
 ## Architecture
 
-### Layers
+![SchemaForge architecture showing the built C++ engine, local website and server, prototype AI planning, and proposed capabilities](docs/images/schemaforge-architecture.png)
 
--   **CLI** — `init` creates editable configs; `generate` runs the generation pipeline.
+The diagram shows the intended system. Labels distinguish built components, the early AI prototype, and proposed capabilities.
+
+### Components
+
+-   **Web workspace** — paste a schema, inspect tables, adjust settings, review a plan, generate data, and download the result.
+-   **FastAPI server** — handles browser and HTTP requests, builds validated YAML, and invokes the C++ CLI. The browser does not run C++ directly.
+-   **Optional AI planner** — a hosted model proposes a structured change set; Python checks it against the schema and stated goal, then prepares a config for human review. It does not generate rows or write executable YAML directly.
+-   **CLI** — `init` creates editable configs; `generate` runs the generation pipeline independently of the website.
 -   **Parser adapter** — wraps Hyrise SQL Parser and converts parser output into SchemaForge domain objects.
 -   **Schema model** — represents tables, columns, SQL types, keys, unique constraints, foreign keys, nullability, and checks.
 -   **Config model** — loads generation settings, output settings, validation settings, row counts, and column controls.
@@ -41,26 +58,6 @@ SchemaForge is an educational systems project for practicing C++ beyond syntax: 
 -   **Database validation** — optionally imports generated output into SQLite or PostgreSQL.
 -   **Benchmark engine** — records rows, timing, throughput, output size, validation time, and memory usage.
 
-```mermaid
-flowchart TD
-  A[SQL CREATE TABLE schema] --> B[Hyrise SQL Parser]
-  B --> C[Parser Adapter]
-  C --> D[Internal Schema Model]
-  D --> E[Schema + Config Validation]
-  E --> F[Foreign-Key Dependency Graph]
-  F --> G[Generation Plan]
-  G --> H[Deterministic Row Generator]
-  H --> I{Streaming Output Writer}
-  I --> J[SQL INSERT]
-  I --> K[CSV files]
-  I --> L[PostgreSQL COPY]
-  J --> M[SQLite / PostgreSQL Validation]
-  K --> M
-  L --> M
-  M --> N[Benchmark Report]
-
-```
-
 ### Design choices
 
 -   **Parser boundary**: external parser structures are converted once into internal C++ objects instead of leaking parser-specific types across the codebase.
@@ -70,6 +67,8 @@ flowchart TD
 -   **Streaming writers**: large datasets are written row-by-row instead of requiring all rows to be buffered before output.
 -   **Validation before side effects**: unsupported schemas and impossible configs are rejected before output files are opened.
 -   **Database-backed correctness**: generated data can be imported into real databases so real constraints verify correctness.
+-   **Review before generation**: AI suggestions are checked against schema names, supported settings, explicit requests, and C++ feasibility checks. The user sees the controls, assumptions, unapplied requests, and exact YAML before generating.
+
 ## Features
 
 ### Schema parsing and relationship modeling
@@ -109,19 +108,31 @@ flowchart TD
 -   Optionally validates SQL, CSV, and PostgreSQL COPY output using a temporary PostgreSQL Docker container.
 -   Writes benchmark metrics for rows, generation time, throughput, output size, validation time, total command time, and Linux peak RSS memory.
 
+### Local website, API, and planning prototype
+
+-   Inspects pasted `CREATE TABLE` statements and shows discovered tables and columns.
+-   Lets users set row counts, numeric ranges, allowed values, and null probabilities through controls; SQL is the default output.
+-   Offers SQL INSERT, CSV, and PostgreSQL COPY output with previews, downloads, and validation results.
+-   Uses a dark theme by default, with a light-theme toggle.
+-   Exposes the same local workflow through FastAPI for HTTP clients.
+-   Optionally proposes settings from a plain-English test goal, applies them to the visible controls, and shows a read-only YAML preview.
+-   Lets users edit the proposed controls or undo AI changes; edits trigger a fresh config preview and validation before generation.
+-   Shows assumptions and unsupported requests instead of silently claiming to satisfy them.
+
 ## Stack and dependencies
 
 
 | Component | Details |
- |---|---|
- | Language | C++ |
-  | Build system | CMake, plus a convenience Makefile |
-   | SQL parser | Vendored Hyrise SQL Parser under `external/sql-parser` | 
-   | Config | YAML via yaml-cpp | 
-   | SQLite validation | SQLite runtime + development headers | 
-   | PostgreSQL validation | Docker + temporary `postgres:17-alpine` container | 
-   | Primary platforms | Linux, Arch/Manjaro, Ubuntu/Debian, macOS | 
-   | Main binary | `schemaforge` |
+|---|---|
+| Engine and CLI | C++ and CMake; `schemaforge` binary |
+| SQL parsing | Hyrise SQL Parser Git submodule under `external/sql-parser` |
+| Configuration | YAML via yaml-cpp |
+| HTTP server and AI plan checks | Python, FastAPI, Pydantic |
+| Web workspace | React, TypeScript, Vite |
+| Optional AI providers | UF NaviGator AI Toolkit or OpenAI API; server-side key required |
+| SQLite validation | SQLite runtime and development headers |
+| PostgreSQL validation | Docker and temporary `postgres:17-alpine` container |
+| Primary platforms | Linux, Arch/Manjaro, Ubuntu/Debian, macOS |
 
 ## Project structure
 
@@ -132,7 +143,9 @@ schemaforge/
 ├── README.md
 ├── LICENSE
 ├── docs/
-│   └── architecture.md
+│   ├── architecture.md
+│   ├── ai-planner-contract.md
+│   └── images/schemaforge-architecture.png
 ├── examples/
 │   ├── final_demo/                 # End-to-end demo configs, schema, output samples, benchmarks
 │   └── benchmarks/                 # Large benchmark fixtures
@@ -169,7 +182,7 @@ schemaforge/
 │   ├── run_benchmarks.sh
 │   ├── run_integration_tests.sh
 │   └── run_postgres_validation_tests.sh
-├── server/                        # FastAPI interface to the C++ CLI
+├── server/                        # FastAPI interface, config compiler, AI plan checks
 ├── web/                           # React and TypeScript workspace
 ├── benchmark-results/              # Generated benchmark artifacts, ignored by Git
 ├── schemaforge.yaml                # Example/generated config
@@ -221,6 +234,11 @@ brew install cmake yaml-cpp sqlite
 
 ```
 
+The website also needs Python 3.11 or newer, Node.js, and pnpm. On macOS,
+`make setup` installs missing Homebrew build tools and Node/pnpm; install Python
+separately if needed. On Linux, install Node.js and pnpm before running that
+target. Docker is optional and needed only for PostgreSQL validation.
+
 Configure and build:
 
 ```bash
@@ -258,21 +276,27 @@ cmake --install build --prefix "$HOME/.local"
 
 ## Web workspace and HTTP API
 
-The local website uses the same C++ CLI as the command line workflow. A FastAPI
-server runs the CLI for each request and exposes the same API to the browser or
-to `curl`. The website supports SQL schema inspection, row and column controls,
-SQL/CSV/PostgreSQL COPY output, preview, download, and the engine's validation
-results. It is designed for a laptop demo and binds to loopback by default.
-After inspecting a schema, the optional AI planner can turn a testing goal into
-reviewable controls and YAML. It only proposes settings the current engine can
-validate; unsupported distribution requests are shown as unapplied. Generation
-still runs through the local C++ engine. AI planning sends the schema, current
-settings, and testing goal to the configured provider. For the UF-hosted
-NaviGator model, set `NAVIGATOR_TOOLKIT_API_KEY` on the server before starting
-it; `gpt-oss-20b` is the default. The existing `OPENAI_API_KEY` provider is
-also supported. Keep either key out of the browser and Git. Manual generation
-works without a key. See [server/README.md](server/README.md) for provider
-selection and setup details.
+The local website uses the same C++ CLI as the command-line workflow. FastAPI
+accepts browser and HTTP requests, constructs the engine's configuration, runs
+the CLI, and returns previews, metrics, validation results, and a download. The
+browser does not run C++ directly. The server binds to `127.0.0.1` by default
+and is intended for local use; it has no authentication layer.
+
+The website workflow is:
+
+1. Paste SQL `CREATE TABLE` statements or load the example and click **Inspect schema**.
+2. Set table row counts and optional column rules in **Shape the data**. The AI planner is optional.
+3. Choose SQL, CSV, or PostgreSQL COPY and an available validation method.
+4. Generate, inspect the preview and metrics, then download the output.
+
+Manual configuration and generation work without a model provider. The UI uses
+a dark theme by default and remembers a light-theme preference locally.
+
+The HTTP API includes `/api/schemas/inspect`, `/api/configs/preview`,
+`/api/ai/plan`, `/api/configs/{draft_id}/generate`, and run/download endpoints.
+Open `http://127.0.0.1:8000/docs` while the server is running for interactive
+API documentation. The full request and response contract is in
+[server/README.md](server/README.md).
 
 From the repository root, run these commands once to install dependencies and
 build the engine and website:
@@ -291,16 +315,59 @@ make run
 Open `http://127.0.0.1:8000`. Press Ctrl+C to stop. Run `make run` again next
 time. After frontend edits, run `make web`; after C++ edits, run `make native`.
 Run `make help` to see all targets. If the CLI is outside `build/schemaforge`,
-use `make run SCHEMAFORGE_BINARY=/absolute/path/to/schemaforge`. To use AI
-planning without exporting a key in every terminal, create the Git-ignored
-`server/.env.local` with `NAVIGATOR_TOOLKIT_API_KEY='your-key'` on one line.
-Restrict it to your account with `chmod 600 server/.env.local`. The server
-loads this file when you run `make run`; it does not send the key to the browser.
-See [server/README.md](server/README.md) for the HTTP contract and a `curl`
-example.
+use `make run SCHEMAFORGE_BINARY=/absolute/path/to/schemaforge`. For AI
+planning, put `NAVIGATOR_TOOLKIT_API_KEY='your-key'` in the Git-ignored
+`server/.env.local`, run `chmod 600 server/.env.local`, and restart `make run`.
+Keep the key out of the browser and Git. `make run` loads this file into the
+server process. See [server/README.md](server/README.md) for provider selection,
+the HTTP contract, and a `curl` example.
 
 On macOS, `make native` cleans parser objects from a Linux build before
 compiling, if it finds a Linux parser library in the checkout.
+
+## AI planning and review
+
+The AI path is an **optional prototype** for translating a test goal into
+supported configuration changes. It does not train a model or let a model run
+SQL or generate rows. AI planning sends the pasted schema, current settings,
+and test goal to the configured hosted provider; local generation remains in
+the C++ engine.
+
+| Example goal | Reviewed setting |
+|---|---|
+| “Make 250 users” | `users` row count becomes 250 |
+| “Set orders.id between 2 and 20” | A numeric range rule appears for `orders.id` |
+| “Use only pending and paid for orders.status” | An allowed-values rule appears |
+| “Make 10% of customers.phone values null” | A 0.1 null sampling probability appears, if the column is nullable |
+
+The model returns a structured **proposal**, not engine YAML. Python checks
+table and column names, compatible rule types, and explicitly stated counts,
+ranges, values, and null rates. It derives implied table totals for simple
+per-parent requests where possible. It then builds YAML from the existing
+settings and runs the C++ validation and feasibility checks. An invalid plan is
+rejected rather than offered as executable configuration. The model gets one
+chance to correct an invalid proposal.
+
+On success, the proposed settings appear in the existing controls. The review
+shows assumptions, requests that could not be applied, and a read-only YAML
+preview. Users can edit the controls or undo the AI changes. After an edit,
+the server validates a fresh preview; generation uses the reviewed draft.
+
+For a goal such as “3,000 customers with exactly two orders each,” the planner
+can suggest 3,000 customers and 6,000 orders. The engine can create those table
+totals and valid foreign keys, but it **does not guarantee** exactly two orders
+for each customer. Exact per-parent counts, weighted distributions, and
+verification of the full natural-language test goal remain future work. A null
+rate is a sampling probability, not an exact final percentage. AI planning
+accuracy has not yet been measured against a test set.
+
+UF NaviGator AI Toolkit is selected when `NAVIGATOR_TOOLKIT_API_KEY` is present;
+its default model is `gpt-oss-20b`. `OPENAI_API_KEY` enables the OpenAI
+provider. Set `SCHEMAFORGE_AI_PROVIDER=navigator` or `openai` to choose
+explicitly, and see [server/README.md](server/README.md) for model overrides.
+No key is needed for the manual path. The browser does not receive the key.
+The planning contract and example scenarios are documented in
+[docs/ai-planner-contract.md](docs/ai-planner-contract.md).
 
 ## Testing
 
@@ -326,6 +393,21 @@ scripts/run_postgres_validation_tests.sh
 ```
 
 The PostgreSQL validation script exits successfully with a skip message when Docker is unavailable.
+
+Run the API and AI-planner tests with the replaceable provider test double:
+
+```bash
+server/.venv/bin/pytest server/tests
+```
+
+Rebuild the web app to check its TypeScript and production bundle:
+
+```bash
+make web
+```
+
+These tests do not measure live-model planning accuracy. A live provider test
+requires a configured key and provider access.
 
 ## Quick demo
 
@@ -884,6 +966,9 @@ On macOS, this requires Docker Desktop.
 -   Target PostgreSQL tables must already exist before importing generated COPY output.
 -   Benchmark numbers are local-machine dependent.
 -   Realistic data generation uses deterministic built-in data rather than an external faker library.
+-   The AI planner has no measured planning-accuracy score yet.
+-   The engine does not guarantee exact per-parent row counts, value distributions, or full natural-language test outcomes.
+-   AI planning sends the schema and goal to the selected hosted provider; manual generation runs without that call.
 
 ### Possible enhancements
 
@@ -891,6 +976,8 @@ On macOS, this requires Docker Desktop.
 -   More complete CHECK expression evaluation.
 -   MySQL/MariaDB output and validation.
 -   More realistic domain-specific data generation.
+-   Exact relationship patterns, distributions, and test-goal verification.
+-   A measured evaluation set for AI planning accuracy and failure cases.
 -   Async producer-consumer generation pipeline with bounded queues.
 -   Parallel generation where dependency ordering allows it.
 -   More detailed reporting for insufficient generation domains.
@@ -948,6 +1035,8 @@ On macOS, this requires Docker Desktop.
 | Validation backends | SQLite, PostgreSQL via Docker | 
 | Main scripts | integration tests, benchmark runner, PostgreSQL validation tests | 
 | External parser | Hyrise SQL Parser submodule |
+| Local interfaces | CLI, FastAPI HTTP API, React website |
+| AI planning | Optional reviewed configuration prototype |
 
 To refresh file/line counts locally:
 
