@@ -1,14 +1,21 @@
 """HTTP routes for local SchemaForge runs."""
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 
+from .ai_plan import (PlanApplicationError, apply_ai_plan, canonicalize_model_targets, check_explicit_requests,
+                      drop_unchanged_model_rules, drop_unrequested_zero_null_rates, explain_unsupported_fanout,
+                      ground_explicit_settings, normalize_fanout_plan)
+from .model_provider import InvalidPlanError, NaviGatorProvider, OpenAIProvider, PlanProvider, ProviderError
 from .models import RunRequest, SchemaRequest
-from .runner import EngineError, binary_path, call_engine, download_path, generate, inspect_schema, read_run
+from .runner import (EngineError, binary_path, call_engine, download_path, generate,
+                     generate_prepared, inspect_schema, prepare_config, read_run)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,8 +28,41 @@ app.add_middleware(
 )
 
 
+def engine_messages(error: EngineError) -> list[str]:
+    """Return the actionable diagnostics without the CLI's progress output."""
+    messages: list[str] = []
+    in_errors = False
+    for line in error.log.splitlines():
+        stripped = line.strip()
+        if stripped == "Errors:":
+            in_errors = True
+        elif in_errors and stripped.startswith("- "):
+            messages.append(stripped[2:].strip())
+        elif in_errors and stripped:
+            in_errors = False
+    return list(dict.fromkeys(messages)) or [str(error)]
+
+
 def engine_http_error(error: EngineError) -> HTTPException:
-    return HTTPException(status_code=422, detail={"message": str(error), "log": error.log})
+    return HTTPException(
+        status_code=422,
+        detail={"message": str(error), "errors": engine_messages(error), "log": error.log},
+    )
+
+
+class PlanningRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request: RunRequest
+    testing_goal: str = Field(min_length=3, max_length=4_000)
+
+
+def planning_provider() -> PlanProvider:
+    provider = os.environ.get("SCHEMAFORGE_AI_PROVIDER", "navigator" if os.environ.get("NAVIGATOR_TOOLKIT_API_KEY") else "openai").lower()
+    if provider == "navigator":
+        return NaviGatorProvider()
+    if provider != "openai":
+        raise ProviderError("SCHEMAFORGE_AI_PROVIDER must be 'navigator' or 'openai'.")
+    return OpenAIProvider()
 
 
 @app.get("/api/health")
@@ -54,6 +94,57 @@ def create_run(request: RunRequest) -> dict[str, object]:
         return generate(request)
     except EngineError as error:
         raise engine_http_error(error) from error
+
+
+@app.post("/api/configs/preview")
+def preview_config(request: RunRequest) -> dict[str, object]:
+    try:
+        return prepare_config(request)
+    except EngineError as error:
+        raise engine_http_error(error) from error
+
+
+@app.post("/api/configs/{draft_id}/generate")
+def generate_config(draft_id: str) -> dict[str, object]:
+    try:
+        return generate_prepared(draft_id)
+    except EngineError as error:
+        raise engine_http_error(error) from error
+
+
+@app.post("/api/ai/plan")
+def create_ai_plan(body: PlanningRequest) -> dict[str, object]:
+    try:
+        inspection = inspect_schema(body.request)
+        provider = planning_provider()
+        current = body.request.model_dump(by_alias=True)
+        feedback: str | None = None
+        for attempt in range(2):
+            try:
+                plan = provider.propose(
+                    sql=body.request.sql, request=body.testing_goal, inspection=inspection,
+                    current=current, feedback=feedback)
+                plan = canonicalize_model_targets(plan, inspection)
+                plan = drop_unchanged_model_rules(plan, current)
+                plan = ground_explicit_settings(body.testing_goal, plan, inspection)
+                plan = drop_unrequested_zero_null_rates(body.testing_goal, plan, inspection)
+                plan = normalize_fanout_plan(body.testing_goal, plan, inspection, current)
+                check_explicit_requests(body.testing_goal, plan, inspection, current)
+                plan = explain_unsupported_fanout(body.testing_goal, plan, inspection, current)
+                applied = apply_ai_plan(body.request, plan, inspection)
+                break
+            except (InvalidPlanError, PlanApplicationError) as error:
+                if attempt:
+                    raise
+                feedback = str(error)
+        draft = prepare_config(applied)
+        return {"plan": plan.model_dump(), "draft": draft}
+    except EngineError as error:
+        raise engine_http_error(error) from error
+    except PlanApplicationError as error:
+        raise HTTPException(status_code=422, detail={"message": str(error), "errors": [str(error)]}) from error
+    except ProviderError as error:
+        raise HTTPException(status_code=503, detail={"message": str(error), "errors": [str(error)]}) from error
 
 
 @app.get("/api/runs/{run_id}")

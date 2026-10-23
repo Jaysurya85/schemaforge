@@ -54,6 +54,7 @@ void print_usage(std::ostream& output) {
          << "  schemaforge init [--schema schema.sql] [--config schemaforge.yaml] "
             "[--seed 42] [--default-rows 10]\n"
          << "  schemaforge generate [--config schemaforge.yaml]\n"
+         << "  schemaforge validate [--config schemaforge.yaml]\n"
          << "  schemaforge --help\n";
 }
 
@@ -140,7 +141,44 @@ int run_init(int argc, char* argv[]) {
   return 0;
 }
 
-int run_generate(int argc, char* argv[]) {
+std::optional<SchemaAnalysis> validate_run_config(
+    const schemaforge::GenerationConfig& generation_config) {
+  if (generation_config.output_format != "sql" && generation_config.output_format != "csv" &&
+      generation_config.output_format != "postgres_copy") {
+    std::cerr << "Unsupported output format: " << generation_config.output_format << '\n';
+    return std::nullopt;
+  }
+  if (generation_config.output_format == "postgres_copy" &&
+      generation_config.dialect != schemaforge::SqlDialect::Postgres) {
+    std::cerr << "postgres_copy output requires dialect: postgres\n";
+    return std::nullopt;
+  }
+
+  SchemaAnalysis analysis = analyze_schema(generation_config.schema_path, false);
+  if (analysis.table_order.empty()) {
+    return std::nullopt;
+  }
+
+  schemaforge::ValidationResult config_result =
+      schemaforge::ValidationRunner::validate_config(analysis.sorted_tables, generation_config);
+  std::cout << "Config " << config_result << "\n";
+  if (!config_result.is_valid) {
+    return std::nullopt;
+  }
+
+  schemaforge::SchemaCapacityInfo capacity_info =
+      schemaforge::CapacityAnalyzer::analyze(analysis.sorted_tables, generation_config);
+  schemaforge::ValidationResult generation_result =
+      schemaforge::ValidationRunner::validate_generation(analysis.sorted_tables, generation_config,
+                                                         capacity_info);
+  std::cout << "Generation " << generation_result << "\n";
+  if (!generation_result.is_valid) {
+    return std::nullopt;
+  }
+  return analysis;
+}
+
+int run_generate_or_validate(int argc, char* argv[], bool generate) {
   std::string config_path = "schemaforge.yaml";
   schemaforge::GenerationConfig generation_config = schemaforge::GenerationConfig::make_default();
 
@@ -152,42 +190,16 @@ int run_generate(int argc, char* argv[]) {
     return 1;
   }
   const auto command_start = std::chrono::steady_clock::now();
+  std::optional<SchemaAnalysis> validated = validate_run_config(generation_config);
+  if (!validated.has_value()) {
+    return 1;
+  }
+  if (!generate) {
+    std::cout << "Preflight validation passed. No data generated.\n";
+    return 0;
+  }
+  SchemaAnalysis analysis = std::move(*validated);
   schemaforge::BenchmarkReport benchmark_report;
-
-  if (generation_config.output_format != "sql" && generation_config.output_format != "csv" &&
-      generation_config.output_format != "postgres_copy") {
-    std::cerr << "Unsupported output format: " << generation_config.output_format << '\n';
-    return 1;
-  }
-  if (generation_config.output_format == "postgres_copy" &&
-      generation_config.dialect != schemaforge::SqlDialect::Postgres) {
-    std::cerr << "postgres_copy output requires dialect: postgres\n";
-    return 1;
-  }
-
-  SchemaAnalysis analysis = analyze_schema(generation_config.schema_path, false);
-  if (analysis.table_order.empty()) {
-    return 1;
-  }
-
-  schemaforge::ValidationResult config_validation_result =
-      schemaforge::ValidationRunner::validate_config(analysis.sorted_tables, generation_config);
-  std::cout << "Config " << config_validation_result << "\n";
-  if (!config_validation_result.is_valid) {
-    return 1;
-  }
-
-  schemaforge::SchemaCapacityInfo capacity_info =
-      schemaforge::CapacityAnalyzer::analyze(analysis.sorted_tables, generation_config);
-
-  schemaforge::ValidationResult generation_validation_result =
-      schemaforge::ValidationRunner::validate_generation(analysis.sorted_tables, generation_config,
-                                                         capacity_info);
-
-  std::cout << "Generation " << generation_validation_result << "\n";
-  if (!generation_validation_result.is_valid) {
-    return 1;
-  }
 
   const auto generation_start = std::chrono::steady_clock::now();
   std::vector<std::string> output_files;
@@ -381,7 +393,10 @@ auto main(int argc, char* argv[]) -> int {
   }
 
   if (command == "generate") {
-    return run_generate(argc, argv);
+    return run_generate_or_validate(argc, argv, true);
+  }
+  if (command == "validate") {
+    return run_generate_or_validate(argc, argv, false);
   }
 
   std::cerr << "Unknown command: " << command << '\n';

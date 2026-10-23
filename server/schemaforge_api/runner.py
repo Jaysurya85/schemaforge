@@ -1,6 +1,7 @@
 """File-based adapter for SchemaForge's existing CLI."""
 
 import csv
+import hashlib
 import os
 import shutil
 import subprocess
@@ -49,6 +50,58 @@ def ensure_schema_only(sql: str) -> None:
             raise EngineError("Only CREATE TABLE statements are accepted in the schema editor.")
 
 
+def schema_column_definitions(sql: str) -> list[list[tuple[str, str]]]:
+    """List column names and SQL types after the CLI validates the schema."""
+    constraint_starts = {"CONSTRAINT", "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "KEY", "INDEX"}
+    tables: list[list[tuple[str, str]]] = []
+    for statement in sqlparse.parse(sql):
+        columns: list[tuple[str, str]] = []
+        depth = 0
+        first_token = None
+        type_token = None
+
+        def add_column() -> None:
+            if first_token is None or type_token is None:
+                return
+            value = first_token.value
+            quoted = value.startswith(('"', '`', '['))
+            if not quoted and value.upper().split()[0] in constraint_starts:
+                return
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1].replace('""', '"')
+            elif value.startswith('`') and value.endswith('`'):
+                value = value[1:-1].replace('``', '`')
+            elif value.startswith('[') and value.endswith(']'):
+                value = value[1:-1]
+            columns.append((value, type_token.value.upper()))
+
+        for token in statement.flatten():
+            if token.is_whitespace or token.ttype in sqlparse.tokens.Comment:
+                continue
+            if token.value == "(":
+                depth += 1
+            elif token.value == ")":
+                if depth == 1:
+                    add_column()
+                    break
+                depth -= 1
+            elif depth == 1 and token.value == ",":
+                add_column()
+                first_token = None
+                type_token = None
+            elif depth == 1 and first_token is None:
+                first_token = token
+            elif depth == 1 and type_token is None:
+                type_token = token
+        tables.append(columns)
+    return tables
+
+
+def schema_columns(sql: str) -> list[list[str]]:
+    """List column identifiers in each table declaration after CLI validation."""
+    return [[name for name, _ in table] for table in schema_column_definitions(sql)]
+
+
 def call_engine(arguments: list[str]) -> str:
     binary = binary_path()
     if not binary.is_file():
@@ -94,10 +147,18 @@ def initial_config(request: SchemaRequest, directory: Path) -> dict[str, Any]:
 def inspect_schema(request: SchemaRequest) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="schemaforge-inspect-") as temporary:
         config = initial_config(request, Path(temporary))
+        definitions = schema_column_definitions(request.sql)
+        if len(definitions) != len(config["tables"]):
+            raise EngineError("Could not match the parsed tables to their columns.")
         return {
             "tables": [
-                {"name": name, "rows": settings.get("rows", request.default_rows)}
-                for name, settings in config["tables"].items()
+                {
+                    "name": name,
+                    "rows": settings.get("rows", request.default_rows),
+                    "columns": [column for column, _ in definitions[index]],
+                    "column_types": dict(definitions[index]),
+                }
+                for index, (name, settings) in enumerate(config["tables"].items())
             ],
             "dialect": request.dialect,
         }
@@ -121,7 +182,8 @@ def preview_file(path: Path, limit: int = 12) -> dict[str, Any]:
     return {"name": path.name, "kind": "code", "lines": lines}
 
 
-def generate(request: RunRequest) -> dict[str, Any]:
+def compose_generation_config(request: RunRequest, directory: Path) -> dict[str, Any]:
+    """Build the one engine config shared by manual and future AI runs."""
     if request.output_format == "postgres_copy" and request.dialect != "postgres":
         raise EngineError("PostgreSQL COPY output requires the PostgreSQL dialect.")
     if request.validate_with == "sqlite" and (request.dialect != "sqlite" or request.output_format != "sql"):
@@ -129,65 +191,119 @@ def generate(request: RunRequest) -> dict[str, Any]:
     if request.validate_with == "postgres" and request.dialect != "postgres":
         raise EngineError("PostgreSQL validation requires the PostgreSQL dialect.")
 
+    config = initial_config(request, directory)
+    unknown_tables = set(request.tables) - set(config["tables"])
+    if unknown_tables:
+        raise EngineError("Unknown tables: " + ", ".join(sorted(unknown_tables)))
+    for name, settings in request.tables.items():
+        table = config["tables"][name]
+        table["rows"] = settings.rows
+        if settings.columns:
+            table["columns"] = {
+                column: value.model_dump(by_alias=True, exclude_none=True)
+                for column, value in settings.columns.items()
+            }
+
+    config["generation"]["realistic"] = request.realistic
+    config["validation"] = {
+        "sqlite": request.validate_with == "sqlite",
+        "postgres": request.validate_with == "postgres",
+    }
+    config["benchmark"] = {"file": str(directory / "benchmark.yaml")}
+    if request.output_format == "csv":
+        config["output"] = {"format": "csv", "directory": str(directory / "csv")}
+    else:
+        suffix = "copy.sql" if request.output_format == "postgres_copy" else "sql"
+        config["output"] = {"format": request.output_format, "file": str(directory / f"output.{suffix}")}
+    return config
+
+
+def render_generation_config(config: dict[str, Any]) -> str:
+    """Use one stable serialization for previews and engine input."""
+    return yaml.safe_dump(config, sort_keys=False)
+
+
+def prepare_config(request: RunRequest) -> dict[str, Any]:
+    """Save and preflight the exact YAML that can later be executed."""
     run_id = uuid.uuid4().hex
     directory = run_root() / run_id
     directory.mkdir(parents=True, exist_ok=False)
     try:
-        config = initial_config(request, directory)
-        unknown_tables = set(request.tables) - set(config["tables"])
-        if unknown_tables:
-            raise EngineError("Unknown tables: " + ", ".join(sorted(unknown_tables)))
-        for name, settings in request.tables.items():
-            table = config["tables"][name]
-            table["rows"] = settings.rows
-            if settings.columns:
-                table["columns"] = {
-                    column: value.model_dump(by_alias=True, exclude_none=True)
-                    for column, value in settings.columns.items()
-                }
-
-        config["generation"]["realistic"] = request.realistic
-        config["validation"] = {
-            "sqlite": request.validate_with == "sqlite",
-            "postgres": request.validate_with == "postgres",
-        }
-        config["benchmark"] = {"file": str(directory / "benchmark.yaml")}
-        if request.output_format == "csv":
-            config["output"] = {"format": "csv", "directory": str(directory / "csv")}
-        else:
-            suffix = "copy.sql" if request.output_format == "postgres_copy" else "sql"
-            config["output"] = {"format": request.output_format, "file": str(directory / f"output.{suffix}")}
-
+        config = compose_generation_config(request, directory)
+        rendered = render_generation_config(config)
         config_path = directory / "schemaforge.yaml"
-        config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-        log = call_engine(["generate", "--config", str(config_path)])
-        if request.output_format == "csv":
-            files = sorted((directory / "csv").glob("*.csv"))
-            if not files:
-                raise EngineError("SchemaForge did not create CSV output.", log)
-            artifact = Path(shutil.make_archive(str(directory / "output"), "zip", directory / "csv"))
-        else:
-            artifact = Path(config["output"]["file"])
-            files = [artifact]
-        if not artifact.is_file():
-            raise EngineError("SchemaForge did not create the output artifact.", log)
-        benchmark = directory / "benchmark.yaml"
-        metrics = yaml.safe_load(benchmark.read_text(encoding="utf-8")) if benchmark.is_file() else {}
-        result = {
-            "id": run_id,
-            "status": "completed",
-            "format": request.output_format,
-            "tables": [{"name": name, "rows": settings.get("rows", request.default_rows)} for name, settings in config["tables"].items()],
-            "previews": [preview_file(path) for path in files],
-            "metrics": metrics or {},
-            "log": log,
-            "download_name": artifact.name,
-        }
-        (directory / "result.yaml").write_text(yaml.safe_dump(result, sort_keys=False), encoding="utf-8")
-        return result
+        config_path.write_text(rendered, encoding="utf-8")
+        call_engine(["validate", "--config", str(config_path)])
+        (directory / "draft_request.json").write_text(request.model_dump_json(by_alias=True), encoding="utf-8")
+        (directory / "draft_sha256").write_text(hashlib.sha256(rendered.encode()).hexdigest(), encoding="utf-8")
+        return {"id": run_id, "yaml": rendered, "request": request.model_dump(by_alias=True)}
     except Exception:
         shutil.rmtree(directory, ignore_errors=True)
         raise
+
+
+def generate_prepared(run_id: str) -> dict[str, Any]:
+    """Execute only a preflighted, unchanged draft."""
+    if len(run_id) != 32 or any(character not in "0123456789abcdef" for character in run_id):
+        raise EngineError("Draft not found.")
+    directory = run_root() / run_id
+    config_path = directory / "schemaforge.yaml"
+    metadata = directory / "draft_request.json"
+    digest = directory / "draft_sha256"
+    if not all(path.is_file() for path in (config_path, metadata, digest)):
+        raise EngineError("Draft not found.")
+    if (directory / "result.yaml").exists():
+        raise EngineError("This draft has already been generated.")
+    rendered = config_path.read_text(encoding="utf-8")
+    if hashlib.sha256(rendered.encode()).hexdigest() != digest.read_text(encoding="utf-8"):
+        raise EngineError("The reviewed configuration changed. Preview it again.")
+    request = RunRequest.model_validate_json(metadata.read_text(encoding="utf-8"))
+    config = yaml.safe_load(rendered)
+    return _execute_config(run_id, directory, request, config)
+
+
+def generate(request: RunRequest) -> dict[str, Any]:
+    run_id = uuid.uuid4().hex
+    directory = run_root() / run_id
+    directory.mkdir(parents=True, exist_ok=False)
+    try:
+        config = compose_generation_config(request, directory)
+
+        config_path = directory / "schemaforge.yaml"
+        config_path.write_text(render_generation_config(config), encoding="utf-8")
+        return _execute_config(run_id, directory, request, config)
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+
+
+def _execute_config(run_id: str, directory: Path, request: RunRequest, config: dict[str, Any]) -> dict[str, Any]:
+    config_path = directory / "schemaforge.yaml"
+    log = call_engine(["generate", "--config", str(config_path)])
+    if request.output_format == "csv":
+        files = sorted((directory / "csv").glob("*.csv"))
+        if not files:
+            raise EngineError("SchemaForge did not create CSV output.", log)
+        artifact = Path(shutil.make_archive(str(directory / "output"), "zip", directory / "csv"))
+    else:
+        artifact = Path(config["output"]["file"])
+        files = [artifact]
+    if not artifact.is_file():
+        raise EngineError("SchemaForge did not create the output artifact.", log)
+    benchmark = directory / "benchmark.yaml"
+    metrics = yaml.safe_load(benchmark.read_text(encoding="utf-8")) if benchmark.is_file() else {}
+    result = {
+        "id": run_id,
+        "status": "completed",
+        "format": request.output_format,
+        "tables": [{"name": name, "rows": settings.get("rows", request.default_rows)} for name, settings in config["tables"].items()],
+        "previews": [preview_file(path) for path in files],
+        "metrics": metrics or {},
+        "log": log,
+        "download_name": artifact.name,
+    }
+    (directory / "result.yaml").write_text(yaml.safe_dump(result, sort_keys=False), encoding="utf-8")
+    return result
 
 
 def read_run(run_id: str) -> dict[str, Any] | None:

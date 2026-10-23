@@ -5,8 +5,8 @@ from pathlib import Path
 import yaml
 from fastapi.testclient import TestClient
 
-from schemaforge_api.app import app
-from schemaforge_api.runner import EngineError, ensure_schema_only
+from schemaforge_api.app import app, engine_http_error, engine_messages
+from schemaforge_api.runner import EngineError, ensure_schema_only, schema_column_definitions, schema_columns
 
 
 client = TestClient(app)
@@ -20,6 +20,37 @@ def test_schema_editor_accepts_tables_and_rejects_other_statements() -> None:
         assert "Only CREATE TABLE" in str(error)
     else:
         raise AssertionError("A non-table SQL statement was accepted")
+
+
+def test_column_choices_skip_constraints_and_nested_commas() -> None:
+    columns = schema_columns(
+        'CREATE TABLE orders ("order id" INTEGER PRIMARY KEY, total DECIMAL(10, 2), '
+        'customer_id INTEGER, CONSTRAINT fk FOREIGN KEY (customer_id) REFERENCES customers(id));'
+    )
+    assert columns == [["order id", "total", "customer_id"]]
+    assert schema_column_definitions(
+        'CREATE TABLE orders ("order id" INTEGER PRIMARY KEY, total DECIMAL(10, 2), '
+        'customer_id INTEGER, CONSTRAINT fk FOREIGN KEY (customer_id) REFERENCES customers(id));'
+    ) == [[("order id", "INTEGER"), ("total", "DECIMAL"), ("customer_id", "INTEGER")]]
+
+
+def test_only_actionable_engine_errors_are_displayed() -> None:
+    log = (
+        "Welcome to Schemaforge\nValidation Result: Valid\n"
+        "Generation Validation Result: Invalid\nErrors:\n"
+        "- Cannot generate 100 rows for customers.id.\n"
+        "- Choose a wider range.\n"
+        "- Choose a wider range.\n"
+    )
+    error = EngineError("SchemaForge rejected this schema or configuration.", log)
+    assert engine_messages(error) == [
+        "Cannot generate 100 rows for customers.id.",
+        "Choose a wider range.",
+    ]
+    assert engine_http_error(error).detail["log"] == log
+    assert engine_messages(EngineError("Paste a CREATE TABLE statement.")) == [
+        "Paste a CREATE TABLE statement."
+    ]
 
 
 def test_unknown_request_settings_are_rejected() -> None:

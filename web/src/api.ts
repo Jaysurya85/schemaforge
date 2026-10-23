@@ -22,7 +22,7 @@ export type SchemaInput = {
 }
 
 export type InspectResult = {
-  tables: Array<{ name: string; rows: number }>
+  tables: Array<{ name: string; rows: number; columns: string[]; column_types: Record<string, string> }>
   dialect: Dialect
 }
 
@@ -32,6 +32,19 @@ export type RunInput = SchemaInput & {
   output_format: OutputFormat
   validate_with: Validation
 }
+
+export type AIPlan = {
+  version: 1
+  table_rows: Array<{ table: string; rows: number }>
+  number_ranges: Array<{ table: string; column: string; min: number; max: number }>
+  value_lists: Array<{ table: string; column: string; values: Array<string | number | boolean> }>
+  null_rates: Array<{ table: string; column: string; probability: number }>
+  assumptions: string[]
+  unapplied: Array<{ request: string; reason: string; explanation: string }>
+}
+
+export type ConfigDraft = { id: string; yaml: string; request: RunInput }
+export type AIReview = { plan: AIPlan; draft: ConfigDraft }
 
 export type FilePreview =
   | { name: string; kind: 'code'; lines: string[] }
@@ -69,8 +82,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const detail = body.detail
+    if (typeof detail === 'object' && Array.isArray(detail?.errors) && detail.errors.length) {
+      throw new Error(detail.errors.join('\n'))
+    }
     if (typeof detail === 'object' && detail?.message) {
-      throw new Error(detail.log ? `${detail.message}\n${detail.log}` : detail.message)
+      throw new Error(detail.message)
     }
     if (Array.isArray(detail) && detail.length) {
       throw new Error(detail.map((issue) => `${issue.loc?.slice(1).join('.') || 'Input'}: ${issue.msg}`).join('\n'))
@@ -87,5 +103,11 @@ export const api = {
     request<InspectResult>('/api/schemas/inspect', { method: 'POST', body: JSON.stringify(input) }),
   generate: (input: RunInput) =>
     request<RunResult>('/api/runs', { method: 'POST', body: JSON.stringify(input) }),
+  plan: (input: RunInput, testingGoal: string) =>
+    request<AIReview>('/api/ai/plan', { method: 'POST', body: JSON.stringify({ request: input, testing_goal: testingGoal }) }),
+  previewConfig: (input: RunInput) =>
+    request<ConfigDraft>('/api/configs/preview', { method: 'POST', body: JSON.stringify(input) }),
+  generateDraft: (draftId: string) =>
+    request<RunResult>(`/api/configs/${draftId}/generate`, { method: 'POST' }),
   downloadUrl: (runId: string) => `/api/runs/${runId}/download`,
 }
